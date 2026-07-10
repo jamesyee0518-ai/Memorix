@@ -94,7 +94,7 @@ import type {
   AgentToolDefinition,
 } from "./types";
 
-const API_BASE_URL = "http://localhost:9101/api";
+const API_BASE_URL = "http://127.0.0.1:9101/api";
 const TOKEN_KEY = "access_token";
 
 /** 获取 localStorage 中的 token */

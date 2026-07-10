@@ -30,7 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const API_BASE = "http://localhost:9101/api";
+const API_BASE = "http://127.0.0.1:9101/api";
 
 // 错误码表格数据
 const errorCodes = [
