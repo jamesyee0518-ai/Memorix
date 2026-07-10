@@ -223,7 +223,8 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
 fn log_stdio(path: &std::path::Path) -> Result<(Stdio, Stdio), Box<dyn std::error::Error>> {
     let file = std::fs::OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(path)?;
     Ok((Stdio::from(file.try_clone()?), Stdio::from(file)))
 }
@@ -255,7 +256,7 @@ fn web_command(
     }
 
     let mut command = Command::new(node);
-    command.arg(server_path);
+    command.arg("server.js");
     Ok(command)
 }
 
