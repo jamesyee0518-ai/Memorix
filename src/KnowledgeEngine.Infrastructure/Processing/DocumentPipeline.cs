@@ -69,6 +69,7 @@ public class DocumentPipeline : IDocumentPipeline
         {
             "url" => "parse_url",
             "pdf" => "parse_pdf",
+            "markdown" or "text_file" or "word" or "spreadsheet" or "csv" => "parse_file",
             _ => "parse_text"
         };
 
@@ -610,7 +611,7 @@ public class DocumentPipeline : IDocumentPipeline
     /// Returns true if the step name is a parse step.
     /// </summary>
     private static bool IsParseStep(string stepName)
-        => stepName is "parse_url" or "parse_pdf" or "parse_text";
+        => stepName is "parse_url" or "parse_pdf" or "parse_text" or "parse_file";
 
     private async Task CreateTagsAsync(Guid documentId, Guid userId, List<TagResult> tags, CancellationToken ct)
     {

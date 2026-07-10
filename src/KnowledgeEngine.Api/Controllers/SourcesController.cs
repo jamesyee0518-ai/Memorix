@@ -54,6 +54,7 @@ public class SourcesController : BaseController
     [RequestFormLimits(MultipartBodyLengthLimit = 52_428_800)]
     public async Task<IActionResult> ImportFile(
         [FromForm] Guid topicId,
+        [FromForm] string? title,
         IFormFile file,
         CancellationToken ct)
     {
@@ -63,7 +64,8 @@ public class SourcesController : BaseController
         }
 
         await using var stream = file.OpenReadStream();
-        var result = await _sourceService.ImportPdfAsync(topicId, file.FileName, file.ContentType, file.Length, stream, ct);
+        var result = await _sourceService.ImportFileAsync(
+            topicId, file.FileName, file.ContentType, file.Length, stream, title, ct);
         return StatusCode(201, ApiResponse<SourceResponse>.Ok(result.Data!, GetTraceId()));
     }
 

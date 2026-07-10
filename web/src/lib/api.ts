@@ -492,12 +492,13 @@ export const entityApi = {
 // ===== 标签 API =====
 
 export const tagApi = {
-  list(params?: { type?: string }): Promise<Tag[]> {
-    return request<Tag[]>({
+  async list(params?: { type?: string }): Promise<Tag[]> {
+    const result = await request<PagedResult<Tag>>({
       method: "GET",
       url: "/tags",
-      params,
+      params: { ...params, pageSize: 100 },
     });
+    return result.items;
   },
 
   get(id: string): Promise<Tag> {

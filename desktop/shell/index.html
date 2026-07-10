@@ -11,29 +11,54 @@
         display: grid;
         place-items: center;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #0f172a;
-        color: #e2e8f0;
+        background: #f7f9fc;
+        color: #1f2937;
       }
       main {
-        max-width: 560px;
+        max-width: 420px;
         padding: 32px;
         text-align: center;
       }
+      .mark {
+        width: 54px;
+        height: 54px;
+        margin: 0 auto 18px;
+        border: 6px solid #0d47a1;
+        border-right-color: #00b8c8;
+        border-radius: 16px;
+        animation: pulse 1.4s ease-in-out infinite;
+      }
       h1 {
         margin: 0 0 12px;
-        font-size: 28px;
+        font-size: 24px;
+        color: #0d47a1;
       }
       p {
         margin: 0;
-        color: #94a3b8;
+        color: #64748b;
         line-height: 1.7;
+      }
+      .error {
+        color: #b42318;
+      }
+      @keyframes pulse {
+        50% { transform: scale(0.94); opacity: 0.72; }
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>Memorix Desktop</h1>
-      <p>桌面壳已启动。请确保本地 Web 工作台运行在 http://localhost:3000，本地 API 运行在 http://localhost:9101。</p>
+      <div class="mark" aria-hidden="true"></div>
+      <h1>Memorix</h1>
+      <p id="status">正在启动本地知识引擎...</p>
     </main>
+    <script>
+      window.showStartupError = (message) => {
+        document.querySelector(".mark").style.animation = "none";
+        const status = document.querySelector("#status");
+        status.className = "error";
+        status.textContent = `启动失败：${message}`;
+      };
+    </script>
   </body>
 </html>

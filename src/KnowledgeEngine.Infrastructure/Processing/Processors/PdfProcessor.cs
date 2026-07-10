@@ -11,18 +11,18 @@ public class PdfProcessor : ISourceProcessor
 
     private readonly IAppDbContext _db;
     private readonly IContentProcessor _contentProcessor;
-    private readonly IFileStorageProvider _fileStorageProvider;
+    private readonly IFileStorageFactory _fileStorageFactory;
     private readonly ILogger<PdfProcessor> _logger;
 
     public PdfProcessor(
         IAppDbContext db,
         IContentProcessor contentProcessor,
-        IFileStorageProvider fileStorageProvider,
+        IFileStorageFactory fileStorageFactory,
         ILogger<PdfProcessor> logger)
     {
         _db = db;
         _contentProcessor = contentProcessor;
-        _fileStorageProvider = fileStorageProvider;
+        _fileStorageFactory = fileStorageFactory;
         _logger = logger;
     }
 
@@ -45,7 +45,9 @@ public class PdfProcessor : ISourceProcessor
             throw new InvalidOperationException("PDF file object not found");
         }
 
-        await using var stream = await _fileStorageProvider.DownloadFileAsync(
+        var fileStorageProvider = await _fileStorageFactory.GetProviderForWorkspaceAsync(
+            fileObject.WorkspaceId.ToString(), ct);
+        await using var stream = await fileStorageProvider.DownloadFileAsync(
             fileObject.Bucket, fileObject.ObjectKey, ct);
         var pdfText = await _contentProcessor.ExtractPdfTextAsync(stream);
 

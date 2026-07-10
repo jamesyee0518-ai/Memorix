@@ -35,10 +35,35 @@ pub fn run() {
         .setup(|app| {
             #[cfg(not(debug_assertions))]
             {
-                start_production_sidecars(app)?;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title("Memorix - 正在启动");
+                }
+
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || match start_production_sidecars(&app_handle) {
+                    Ok(()) => {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            if let Ok(url) = "http://127.0.0.1:3000".parse() {
+                                let _ = window.navigate(url);
+                            }
+                            let _ = window.set_title("Memorix");
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let message = serde_json::to_string(&error.to_string())
+                                .unwrap_or_else(|_| "\"Unknown startup error\"".to_string());
+                            let _ = window.eval(format!("window.showStartupError?.({message})"));
+                            let _ = window.set_title("Memorix - 启动失败");
+                        }
+                    }
+                });
             }
 
+            #[cfg(debug_assertions)]
             if let Some(window) = app.get_webview_window("main") {
+                let url = "http://localhost:3000".parse()?;
+                window.navigate(url)?;
                 let _ = window.set_title("Memorix");
             }
             Ok(())
@@ -106,7 +131,7 @@ fn open_directory(path: String) -> Result<(), String> {
 }
 
 #[cfg(not(debug_assertions))]
-fn start_production_sidecars(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let resource_dir = app.path().resource_dir()?.join("resources");
     let app_data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&app_data_dir)?;

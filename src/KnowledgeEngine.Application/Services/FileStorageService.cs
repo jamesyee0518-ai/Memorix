@@ -8,18 +8,18 @@ namespace KnowledgeEngine.Application.Services;
 
 public class FileStorageService
 {
-    private readonly IFileStorageProvider _storageProvider;
+    private readonly IFileStorageFactory _storageFactory;
     private readonly IAppDbContext _db;
     private readonly ICurrentUserContext _currentUser;
     private readonly ILogger<FileStorageService> _logger;
 
     public FileStorageService(
-        IFileStorageProvider storageProvider,
+        IFileStorageFactory storageFactory,
         IAppDbContext db,
         ICurrentUserContext currentUser,
         ILogger<FileStorageService> logger)
     {
-        _storageProvider = storageProvider;
+        _storageFactory = storageFactory;
         _db = db;
         _currentUser = currentUser;
         _logger = logger;
@@ -48,7 +48,8 @@ public class FileStorageService
         var bucket = "knowledge-engine";
         var objectKey = $"users/{userId}/files/{fileId}/original.pdf";
 
-        await _storageProvider.UploadFileAsync(bucket, objectKey, stream, contentType, fileSize, ct);
+        var storageProvider = await _storageFactory.GetProviderAsync(ct);
+        await storageProvider.UploadFileAsync(bucket, objectKey, stream, contentType, fileSize, ct);
 
         var now = DateTime.UtcNow;
         var fileObject = new Domain.Entities.FileObject
@@ -60,7 +61,7 @@ public class FileStorageService
             OriginalFilename = fileName,
             MimeType = contentType,
             SizeBytes = fileSize,
-            StorageProvider = "minio",
+            StorageProvider = GetStorageProviderName(storageProvider),
             CreatedAt = now
         };
         _db.Files.Add(fileObject);
@@ -94,7 +95,8 @@ public class FileStorageService
             throw new NotFoundException("File", fileId);
         }
 
-        var url = await _storageProvider.GetPresignedDownloadUrlAsync(fileObject.Bucket, fileObject.ObjectKey, 3600, ct);
+        var storageProvider = await _storageFactory.GetProviderForWorkspaceAsync(userId.ToString(), ct);
+        var url = await storageProvider.GetPresignedDownloadUrlAsync(fileObject.Bucket, fileObject.ObjectKey, 3600, ct);
 
         return ApiResponse<object>.Ok(new
         {
@@ -105,8 +107,15 @@ public class FileStorageService
         });
     }
 
-    internal async Task UploadPdfInternalAsync(string bucket, string objectKey, Stream stream, string contentType, long fileSize, CancellationToken ct = default)
+    internal async Task<string> UploadFileInternalAsync(string bucket, string objectKey, Stream stream, string contentType, long fileSize, CancellationToken ct = default)
     {
-        await _storageProvider.UploadFileAsync(bucket, objectKey, stream, contentType, fileSize, ct);
+        var storageProvider = await _storageFactory.GetProviderAsync(ct);
+        await storageProvider.UploadFileAsync(bucket, objectKey, stream, contentType, fileSize, ct);
+        return GetStorageProviderName(storageProvider);
     }
+
+    private static string GetStorageProviderName(IFileStorageProvider storageProvider)
+        => storageProvider.GetType().Name.Contains("Local", StringComparison.OrdinalIgnoreCase)
+            ? "local_fs"
+            : "minio";
 }

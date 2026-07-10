@@ -57,6 +57,11 @@ const sourceTypeLabels: Record<string, string> = {
   url: "URL",
   text: "文本",
   pdf: "PDF",
+  markdown: "Markdown",
+  text_file: "文本文件",
+  word: "Word",
+  spreadsheet: "Excel",
+  csv: "CSV",
 };
 
 export function getSourceTypeLabel(type: string): string {

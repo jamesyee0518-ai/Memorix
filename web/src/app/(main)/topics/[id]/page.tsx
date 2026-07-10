@@ -228,6 +228,11 @@ export default function TopicDetailPage() {
                   <SelectItem value="url">URL</SelectItem>
                   <SelectItem value="text">文本</SelectItem>
                   <SelectItem value="pdf">PDF</SelectItem>
+                  <SelectItem value="markdown">Markdown</SelectItem>
+                  <SelectItem value="word">Word</SelectItem>
+                  <SelectItem value="spreadsheet">Excel</SelectItem>
+                  <SelectItem value="csv">CSV</SelectItem>
+                  <SelectItem value="text_file">文本文件</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -285,9 +290,9 @@ export default function TopicDetailPage() {
                           <span className="truncate">{source.url}</span>
                           <ExternalLink className="size-3 shrink-0" />
                         </a>
-                      ) : source.sourceType === "pdf" ? (
+                      ) : source.sourceType !== "text" ? (
                         <span className="truncate text-xs text-muted-foreground">
-                          PDF 文件
+                          {getSourceTypeLabel(source.sourceType)} 文件
                         </span>
                       ) : (
                         <span className="text-xs text-muted-foreground">文本内容</span>

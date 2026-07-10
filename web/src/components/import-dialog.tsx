@@ -63,6 +63,20 @@ type FileForm = z.infer<typeof fileSchema>;
 
 type ImportMode = "direct" | "inbox";
 
+const supportedFileExtensions = new Set([
+  ".pdf",
+  ".md",
+  ".markdown",
+  ".txt",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".csv",
+]);
+
+const fileAccept = Array.from(supportedFileExtensions).join(",");
+
 // ===== 导入弹窗组件 =====
 
 interface ImportDialogProps {
@@ -137,8 +151,9 @@ export function ImportDialog({
 
   const handleFileSelect = useCallback((file: File | undefined) => {
     if (!file) return;
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      toast.error("仅支持 PDF 文件");
+    const extension = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+    if (!supportedFileExtensions.has(extension)) {
+      toast.error("支持 PDF、Markdown、Word、Excel、CSV 和文本文件");
       return;
     }
     if (file.size > 50 * 1024 * 1024) {
@@ -240,7 +255,7 @@ export function ImportDialog({
 
   const onFileSubmit = async (data: FileForm) => {
     if (!selectedFile) {
-      toast.error("请选择 PDF 文件");
+      toast.error("请选择文件");
       return;
     }
     if (mode === "direct" && !data.topicId) {
@@ -310,7 +325,7 @@ export function ImportDialog({
         <DialogHeader>
           <DialogTitle>导入资料</DialogTitle>
           <DialogDescription>
-            支持 URL 链接、文本内容和 PDF 文件三种导入方式
+            支持 URL、文本、PDF、Markdown、Word、Excel 和 CSV
           </DialogDescription>
         </DialogHeader>
 
@@ -362,7 +377,7 @@ export function ImportDialog({
             </TabsTrigger>
             <TabsTrigger value="file" className="flex-1">
               <FileType className="mr-1 size-3.5" />
-              PDF
+              文件
             </TabsTrigger>
           </TabsList>
 
@@ -458,7 +473,7 @@ export function ImportDialog({
             </form>
           </TabsContent>
 
-          {/* PDF Tab */}
+          {/* File Tab */}
           <TabsContent value="file" className="mt-4">
             <form
               onSubmit={fileForm.handleSubmit(onFileSubmit)}
@@ -470,11 +485,11 @@ export function ImportDialog({
                 error={fileForm.formState.errors.topicId?.message}
               />
               <div className="space-y-2">
-                <Label>PDF 文件</Label>
+                <Label>资料文件</Label>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".pdf,application/pdf"
+                  accept={fileAccept}
                   className="hidden"
                   onChange={handleFileInputChange}
                 />
@@ -519,10 +534,10 @@ export function ImportDialog({
                     <Upload className="size-8 text-muted-foreground" />
                     <div className="text-center">
                       <p className="text-sm font-medium">
-                        点击或拖拽 PDF 文件到此处
+                        点击或拖拽文件到此处
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        仅支持 PDF 格式，最大 50MB
+                        PDF、Markdown、Word、Excel、CSV、TXT，最大 50MB
                       </p>
                     </div>
                   </div>
@@ -542,7 +557,7 @@ export function ImportDialog({
                 disabled={submitting || !selectedFile}
               >
                 {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
-                {mode === "inbox" ? "存入收件箱" : "上传 PDF"}
+                {mode === "inbox" ? "存入收件箱" : "上传文件"}
               </Button>
             </form>
           </TabsContent>

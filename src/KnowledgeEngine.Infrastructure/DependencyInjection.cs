@@ -94,6 +94,7 @@ public static class DependencyInjection
         // Phase 3 Pipeline Components
         services.AddScoped<ISourceProcessor, UrlProcessor>();
         services.AddScoped<ISourceProcessor, PdfProcessor>();
+        services.AddScoped<ISourceProcessor, FileDocumentProcessor>();
         services.AddScoped<ISourceProcessor, TextProcessor>();
         services.AddScoped<SourceProcessorFactory>();
         services.AddScoped<IContentCleaner, ContentCleaner>();

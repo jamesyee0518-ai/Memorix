@@ -146,14 +146,24 @@ public class SourceService
         return ApiResponse<SourceResponse>.Ok(Mapper.ToSourceResponse(source));
     }
 
-    public async Task<ApiResponse<SourceResponse>> ImportPdfAsync(Guid topicId, string fileName, string contentType, long fileSize, Stream fileStream, CancellationToken ct = default)
+    public async Task<ApiResponse<SourceResponse>> ImportFileAsync(Guid topicId, string fileName, string contentType, long fileSize, Stream fileStream, string? title = null, CancellationToken ct = default)
     {
         var userId = RequireUserId();
-
-        if (!contentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) &&
-            !fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        var sourceType = extension switch
         {
-            throw new ValidationException("file", "Only PDF files are allowed");
+            ".pdf" => "pdf",
+            ".md" or ".markdown" => "markdown",
+            ".txt" => "text_file",
+            ".doc" or ".docx" => "word",
+            ".xls" or ".xlsx" => "spreadsheet",
+            ".csv" => "csv",
+            _ => null
+        };
+
+        if (sourceType == null)
+        {
+            throw new ValidationException("file", "Supported formats: PDF, Markdown, text, Word, Excel, and CSV");
         }
 
         if (fileSize > 50 * 1024 * 1024)
@@ -176,13 +186,17 @@ public class SourceService
             s => s.UserId == userId && s.TopicId == topicId && s.ContentHash == fileHash && s.Status != "archived", ct);
         if (duplicate != null)
         {
-            throw new DuplicateException("This PDF file has already been imported into this topic");
+            throw new DuplicateException("This file has already been imported into this topic");
         }
 
         var now = DateTime.UtcNow;
         var fileId = Guid.NewGuid();
         var bucket = "knowledge-engine";
-        var objectKey = $"users/{userId}/sources/{fileId}/original.pdf";
+        var objectKey = $"users/{userId}/sources/{fileId}/original{extension}";
+
+        using var uploadStream = new MemoryStream(bytes);
+        var storageProvider = await _fileStorageService.UploadFileInternalAsync(
+            bucket, objectKey, uploadStream, contentType, fileSize, ct);
 
         var fileObject = new FileObject
         {
@@ -194,21 +208,18 @@ public class SourceService
             MimeType = contentType,
             SizeBytes = fileSize,
             Sha256 = fileHash,
-            StorageProvider = "minio",
+            StorageProvider = storageProvider,
             CreatedAt = now
         };
         _db.Files.Add(fileObject);
-
-        using var uploadStream = new MemoryStream(bytes);
-        await _fileStorageService.UploadPdfInternalAsync(bucket, objectKey, uploadStream, contentType, fileSize, ct);
 
         var source = new Source
         {
             Id = Guid.NewGuid(),
             UserId = userId,
             TopicId = topicId,
-            SourceType = "pdf",
-            Title = fileName,
+            SourceType = sourceType,
+            Title = string.IsNullOrWhiteSpace(title) ? fileName : title.Trim(),
             OriginalFileId = fileId,
             ContentHash = fileHash,
             ImportedAt = now,
@@ -224,7 +235,7 @@ public class SourceService
             Id = Guid.NewGuid(),
             UserId = userId,
             SourceId = source.Id,
-            JobType = "parse_pdf",
+            JobType = sourceType == "pdf" ? "parse_pdf" : "parse_file",
             Status = "pending",
             CreatedAt = now
         };
@@ -232,7 +243,8 @@ public class SourceService
 
         await _db.SaveChangesAsync(ct);
 
-        _logger.LogInformation("PDF source imported: {SourceId} by {UserId}", source.Id, userId);
+        _logger.LogInformation("File source imported: {SourceId}, type={SourceType}, user={UserId}",
+            source.Id, sourceType, userId);
         return ApiResponse<SourceResponse>.Ok(Mapper.ToSourceResponse(source));
     }
 
@@ -363,6 +375,7 @@ public class SourceService
                 "url" => "fetch_url",
                 "text" => "parse_text",
                 "pdf" => "parse_pdf",
+                "markdown" or "text_file" or "word" or "spreadsheet" or "csv" => "parse_file",
                 _ => "prepare_document"
             };
 

@@ -115,7 +115,15 @@ export interface TopicUpdateRequest {
 
 // ===== 资料导入 =====
 
-export type SourceType = "url" | "text" | "pdf";
+export type SourceType =
+  | "url"
+  | "text"
+  | "pdf"
+  | "markdown"
+  | "text_file"
+  | "word"
+  | "spreadsheet"
+  | "csv";
 
 export type SourceStatus =
   | "pending"
