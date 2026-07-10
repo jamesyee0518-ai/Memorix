@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WEB_DIR="$(cd "$SCRIPT_DIR/../web" && pwd)"
+NODE_DIR="$(cd "$SCRIPT_DIR/../node" && pwd)"
+
+export NODE_ENV="${NODE_ENV:-production}"
+export HOSTNAME="${HOSTNAME:-127.0.0.1}"
+export PORT="${PORT:-3000}"
+
+NODE_BIN="${MEMORIX_NODE_BIN:-}"
+
+if [[ -z "$NODE_BIN" && -x "$NODE_DIR/bin/node" ]]; then
+  NODE_BIN="$NODE_DIR/bin/node"
+fi
+
+if [[ -z "$NODE_BIN" && -x "$NODE_DIR/node" ]]; then
+  NODE_BIN="$NODE_DIR/node"
+fi
+
+if [[ -z "$NODE_BIN" ]]; then
+  NODE_BIN="node"
+fi
+
+cd "$WEB_DIR"
+exec "$NODE_BIN" server.js

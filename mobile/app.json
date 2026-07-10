@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "Memorix",
+    "slug": "memorix-mobile",
+    "scheme": "memorix",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "ios": {
+      "bundleIdentifier": "com.memorix.mobile",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Memorix uses the microphone to record voice notes for your Inbox."
+      }
+    },
+    "android": {
+      "package": "com.memorix.mobile",
+      "permissions": ["RECORD_AUDIO", "POST_NOTIFICATIONS"]
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:9101/api"
+    }
+  }
+}

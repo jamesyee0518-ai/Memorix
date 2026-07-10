@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">Memorix</title>
+  <rect x="42" y="42" width="940" height="940" rx="210" fill="#FFFFFF"/>
+  <path d="M618 211H302c-50 0-91 41-91 91v420c0 50 41 91 91 91h420c50 0 91-41 91-91V596" fill="none" stroke="#0D47A1" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M675 218v190h190z" fill="#00B8C8"/>
+  <circle cx="500" cy="530" r="112" fill="#0D47A1"/>
+  <circle cx="500" cy="530" r="211" fill="none" stroke="#0D47A1" stroke-width="64" stroke-linecap="round" stroke-dasharray="250 88" transform="rotate(-7 500 530)"/>
+</svg>

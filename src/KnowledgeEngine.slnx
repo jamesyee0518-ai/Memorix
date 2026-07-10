@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="KnowledgeEngine.Api/KnowledgeEngine.Api.csproj" />
+  <Project Path="KnowledgeEngine.Application/KnowledgeEngine.Application.csproj" />
+  <Project Path="KnowledgeEngine.Domain/KnowledgeEngine.Domain.csproj" />
+  <Project Path="KnowledgeEngine.Infrastructure/KnowledgeEngine.Infrastructure.csproj" />
+</Solution>

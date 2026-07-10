@@ -1,0 +1,30 @@
+{
+  "name": "memorix-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "@react-native-community/netinfo": "^11.4.1",
+    "expo": "^53.0.0",
+    "expo-av": "^15.1.7",
+    "expo-constants": "^17.1.7",
+    "expo-device": "^7.1.4",
+    "expo-document-picker": "^13.1.6",
+    "expo-file-system": "^18.1.11",
+    "expo-notifications": "^0.31.4",
+    "expo-status-bar": "^2.2.3",
+    "react": "19.0.0",
+    "react-native": "0.79.5"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}

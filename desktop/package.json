@@ -1,0 +1,16 @@
+{
+  "name": "memorix-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "prepare:bundle": "node scripts/prepare-bundle.mjs",
+    "build": "tauri build",
+    "dev:services": "../scripts/desktop-dev-services.sh",
+    "build:web": "npm --prefix ../web run build",
+    "build:bundle": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}
