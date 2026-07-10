@@ -1,3 +1,5 @@
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+use std::os::windows::process::CommandExt;
 use std::process::Child;
 #[cfg(not(debug_assertions))]
 use std::process::{Command, Stdio};
@@ -115,17 +117,25 @@ fn start_production_sidecars(app: &tauri::App) -> Result<(), Box<dyn std::error:
 
     let mut api = if api_path.exists() && !port_is_open(9101) {
         let (stdout, stderr) = log_stdio(&log_dir.join("api.log"))?;
-        Some(
-            Command::new(&api_path)
-                .current_dir(api_path.parent().ok_or("Invalid API resource path")?)
-                .env("ASPNETCORE_URLS", "http://127.0.0.1:9101")
-                .env("DatabaseProvider", "sqlite")
-                .env("AppDatabasePath", app_data_dir.join("memorix.db"))
-                .env("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false")
-                .stdout(stdout)
-                .stderr(stderr)
-                .spawn()?,
-        )
+        let mut command = Command::new(&api_path);
+        command
+            .current_dir(api_path.parent().ok_or("Invalid API resource path")?)
+            .env("ASPNETCORE_URLS", "http://127.0.0.1:9101")
+            .env("DatabaseProvider", "sqlite")
+            .env("AppDatabasePath", app_data_dir.join("memorix.db"))
+            .env("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false")
+            .stdout(stdout)
+            .stderr(stderr);
+        configure_background_command(&mut command);
+        Some(command.spawn().map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "Failed to start bundled API at {}: {error}",
+                    api_path.display()
+                ),
+            )
+        })?)
     } else {
         None
     };
@@ -133,13 +143,23 @@ fn start_production_sidecars(app: &tauri::App) -> Result<(), Box<dyn std::error:
     let mut web = if web_path.exists() && !port_is_open(3000) {
         let (stdout, stderr) = log_stdio(&log_dir.join("web.log"))?;
         let mut command = web_command(&web_path);
+        configure_background_command(&mut command);
         Some(
             command
                 .env("PORT", "3000")
                 .env("HOSTNAME", "127.0.0.1")
                 .stdout(stdout)
                 .stderr(stderr)
-                .spawn()?,
+                .spawn()
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!(
+                            "Failed to start bundled Web runtime at {}: {error}",
+                            web_path.display()
+                        ),
+                    )
+                })?,
         )
     } else {
         None
@@ -178,6 +198,15 @@ fn web_command(path: &std::path::Path) -> Command {
     command.arg("/C").arg(path);
     command
 }
+
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn configure_background_command(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "windows")))]
+fn configure_background_command(_command: &mut Command) {}
 
 #[cfg(all(not(debug_assertions), not(target_os = "windows")))]
 fn web_command(path: &std::path::Path) -> Command {
