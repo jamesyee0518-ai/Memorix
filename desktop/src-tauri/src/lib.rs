@@ -138,9 +138,14 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
     let log_dir = app_data_dir.join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let api_path = resource_dir.join("api").join(api_executable_name());
-    let web_path = resource_dir.join("bin").join(web_launcher_name());
+    let web_dir = resource_dir.join("web");
+    let web_server_path = web_dir.join("server.js");
 
-    let mut api = if api_path.exists() && !port_is_open(9101) {
+    if !port_is_open(9101) && !api_path.is_file() {
+        return Err(format!("Bundled API executable is missing: {}", api_path.display()).into());
+    }
+
+    let mut api = if !port_is_open(9101) {
         let (stdout, stderr) = log_stdio(&log_dir.join("api.log"))?;
         let mut command = Command::new(&api_path);
         command
@@ -165,12 +170,15 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
         None
     };
 
-    let mut web = if web_path.exists() && !port_is_open(3000) {
-        let (stdout, stderr) = log_stdio(&log_dir.join("web.log"))?;
-        let mut command = web_command(&web_path);
+    let web_log_path = log_dir.join("web.log");
+    let mut web = if !port_is_open(3000) {
+        let (stdout, stderr) = log_stdio(&web_log_path)?;
+        let mut command = web_command(&resource_dir, &web_server_path)?;
         configure_background_command(&mut command);
         Some(
             command
+                .current_dir(&web_dir)
+                .env("NODE_ENV", "production")
                 .env("PORT", "3000")
                 .env("HOSTNAME", "127.0.0.1")
                 .stdout(stdout)
@@ -181,7 +189,7 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
                         error.kind(),
                         format!(
                             "Failed to start bundled Web runtime at {}: {error}",
-                            web_path.display()
+                            web_server_path.display()
                         ),
                     )
                 })?,
@@ -190,14 +198,17 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
         None
     };
 
-    if let Err(error) = wait_for_port(9101, Duration::from_secs(30))
-        .and_then(|_| wait_for_port(3000, Duration::from_secs(30)))
+    if let Err(error) = wait_for_port(9101, Duration::from_secs(30), api.as_mut(), "API")
+        .and_then(|_| wait_for_port(3000, Duration::from_secs(30), web.as_mut(), "Web runtime"))
     {
         for child in [&mut api, &mut web].into_iter().flatten() {
             let _ = child.kill();
             let _ = child.wait();
         }
-        return Err(error);
+        let web_log = read_log_tail(&web_log_path, 4000)
+            .map(|content| format!(" Web log: {content}"))
+            .unwrap_or_default();
+        return Err(format!("{error}.{web_log} Log file: {}", web_log_path.display()).into());
     }
 
     let state = app.state::<Mutex<Sidecars>>();
@@ -217,11 +228,35 @@ fn log_stdio(path: &std::path::Path) -> Result<(Stdio, Stdio), Box<dyn std::erro
     Ok((Stdio::from(file.try_clone()?), Stdio::from(file)))
 }
 
-#[cfg(all(not(debug_assertions), target_os = "windows"))]
-fn web_command(path: &std::path::Path) -> Command {
-    let mut command = Command::new("cmd.exe");
-    command.arg("/C").arg(path);
-    command
+#[cfg(not(debug_assertions))]
+fn web_command(
+    resource_dir: &std::path::Path,
+    server_path: &std::path::Path,
+) -> Result<Command, Box<dyn std::error::Error>> {
+    if !server_path.is_file() {
+        return Err(format!(
+            "Bundled Web entry point is missing: {}",
+            server_path.display()
+        )
+        .into());
+    }
+
+    let bundled_node = if cfg!(target_os = "windows") {
+        resource_dir.join("node").join("node.exe")
+    } else {
+        resource_dir.join("node").join("bin").join("node")
+    };
+    let node = std::env::var_os("MEMORIX_NODE_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or(bundled_node);
+
+    if !node.is_file() {
+        return Err(format!("Bundled Node runtime is missing: {}", node.display()).into());
+    }
+
+    let mut command = Command::new(node);
+    command.arg(server_path);
+    Ok(command)
 }
 
 #[cfg(all(not(debug_assertions), target_os = "windows"))]
@@ -233,9 +268,14 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(all(not(debug_assertions), not(target_os = "windows")))]
 fn configure_background_command(_command: &mut Command) {}
 
-#[cfg(all(not(debug_assertions), not(target_os = "windows")))]
-fn web_command(path: &std::path::Path) -> Command {
-    Command::new(path)
+#[cfg(not(debug_assertions))]
+fn read_log_tail(path: &std::path::Path, max_bytes: usize) -> Option<String> {
+    let content = std::fs::read(path).ok()?;
+    let start = content.len().saturating_sub(max_bytes);
+    let text = String::from_utf8_lossy(&content[start..])
+        .trim()
+        .to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 #[cfg(not(debug_assertions))]
@@ -244,11 +284,24 @@ fn port_is_open(port: u16) -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-fn wait_for_port(port: u16, timeout: Duration) -> Result<(), Box<dyn std::error::Error>> {
+fn wait_for_port(
+    port: u16,
+    timeout: Duration,
+    mut child: Option<&mut Child>,
+    service_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     while started.elapsed() < timeout {
         if port_is_open(port) {
             return Ok(());
+        }
+        if let Some(process) = child.as_mut() {
+            if let Some(status) = process.try_wait()? {
+                return Err(format!(
+                    "Memorix {service_name} exited with {status} before port {port} became ready"
+                )
+                .into());
+            }
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -262,14 +315,5 @@ fn api_executable_name() -> &'static str {
         "KnowledgeEngine.Api.exe"
     } else {
         "KnowledgeEngine.Api"
-    }
-}
-
-#[cfg(not(debug_assertions))]
-fn web_launcher_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "memorix-web.cmd"
-    } else {
-        "memorix-web"
     }
 }
