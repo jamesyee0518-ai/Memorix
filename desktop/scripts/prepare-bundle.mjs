@@ -22,7 +22,7 @@ function run(command, args, cwd = rootDir) {
     cwd,
     env: process.env,
     stdio: "inherit",
-    shell: false,
+    shell: process.platform === "win32",
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
