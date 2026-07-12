@@ -292,6 +292,9 @@ export interface DocumentDetail {
   cleanStatus?: string;
   chunkStatus?: string;
   indexStatus?: string;
+  tagStatus?: string;
+  entityStatus?: string;
+  embeddingStatus?: string;
 
   // Phase 3: Parser metadata
   parserName?: string;

@@ -238,6 +238,15 @@ export function ChunkDebugger({
     queryKey: ["document-chunks", documentId],
     queryFn: () => chunkApi.getDocumentChunks(documentId),
     enabled: !!documentId,
+    refetchInterval: (query) => {
+      const items = query.state.data ?? [];
+      return items.some((item) =>
+        item.embeddingStatus === "pending"
+        || item.embeddingStatus === "processing"
+        || item.embeddingStatus === "stale")
+        ? 3000
+        : false;
+    },
   });
 
   const handleRechunk = async () => {

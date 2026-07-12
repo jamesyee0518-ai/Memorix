@@ -3,6 +3,9 @@ using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Infrastructure.Runtime;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using KnowledgeEngine.Application.Settings;
 
 namespace KnowledgeEngine.Api.Controllers;
 
@@ -20,17 +23,84 @@ public class WorkspacesController : BaseController
     private readonly IConfigService _configService;
     private readonly ICurrentUserContext _currentUser;
     private readonly RuntimeRouter _runtimeRouter;
+    private readonly IAppDbContext _db;
+    private readonly EmbeddingSettings _embeddingSettings;
+    private readonly IConfiguration _configuration;
 
     public WorkspacesController(
         IWorkspaceService workspaceService,
         IConfigService configService,
         ICurrentUserContext currentUser,
-        RuntimeRouter runtimeRouter)
+        RuntimeRouter runtimeRouter,
+        IAppDbContext db,
+        IOptions<EmbeddingSettings> embeddingSettings,
+        IConfiguration configuration)
     {
         _workspaceService = workspaceService;
         _configService = configService;
         _currentUser = currentUser;
         _runtimeRouter = runtimeRouter;
+        _db = db;
+        _embeddingSettings = embeddingSettings.Value;
+        _configuration = configuration;
+    }
+
+    [HttpGet("actions/index-state")]
+    public async Task<IActionResult> GetIndexState(CancellationToken ct)
+    {
+        var userId = _currentUser.UserId ?? Guid.Empty;
+        var chunks = _db.DocumentChunks.Where(chunk => chunk.UserId == userId);
+        var total = await chunks.CountAsync(ct);
+        var indexed = await chunks.CountAsync(chunk => chunk.EmbeddingStatus == "done", ct);
+        var failed = await chunks.CountAsync(chunk => chunk.EmbeddingStatus == "failed", ct);
+        var stale = await chunks.CountAsync(chunk => chunk.EmbeddingStatus == "stale", ct);
+        var processing = await chunks.CountAsync(
+            chunk => chunk.EmbeddingStatus == "pending" || chunk.EmbeddingStatus == "processing", ct);
+        var workspace = await _workspaceService.GetCurrentWorkspaceAsync(userId, ct);
+        var now = DateTime.UtcNow;
+
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            id = workspace?.Id ?? Guid.Empty,
+            workspaceId = workspace?.Id.ToString() ?? "default",
+            provider = workspace?.ModelProvider ?? "lmstudio",
+            model = _embeddingSettings.Model,
+            dimension = (int?)null,
+            indexBackend = string.Equals(_configuration["DatabaseProvider"], "sqlite", StringComparison.OrdinalIgnoreCase)
+                ? "SQLite (local JSON vectors)"
+                : "PostgreSQL (pgvector)",
+            totalChunks = total,
+            indexedChunks = indexed,
+            failedChunks = failed,
+            staleChunks = stale,
+            status = failed > 0 ? "error" : processing > 0 ? "indexing" : "idle",
+            lastRebuiltAt = (DateTime?)null,
+            createdAt = now,
+            updatedAt = now
+        }, GetTraceId()));
+    }
+
+    [HttpPost("actions/rebuild-index")]
+    public async Task<IActionResult> RebuildCurrentIndex(CancellationToken ct)
+    {
+        var userId = _currentUser.UserId ?? Guid.Empty;
+        var chunks = await _db.DocumentChunks.Where(chunk => chunk.UserId == userId).ToListAsync(ct);
+        var documentIds = chunks.Select(chunk => chunk.DocumentId).Distinct().ToList();
+        var documents = await _db.Documents.Where(doc => documentIds.Contains(doc.Id)).ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        foreach (var chunk in chunks)
+        {
+            chunk.EmbeddingStatus = "stale";
+            chunk.UpdatedAt = now;
+        }
+        foreach (var document in documents)
+        {
+            document.EmbeddingStatus = "processing";
+            document.IndexStatus = "processing";
+            document.UpdatedAt = now;
+        }
+        await _db.SaveChangesAsync(ct);
+        return Ok(ApiResponse<bool>.Ok(true, GetTraceId()));
     }
 
     /// <summary>

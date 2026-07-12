@@ -70,6 +70,88 @@ public class DocumentsController : BaseController
         return Ok(ApiResponse<List<ProcessingLogItem>>.Ok(result.Data!, GetTraceId()));
     }
 
+    [HttpGet("{documentId:guid}/chunks")]
+    public async Task<IActionResult> GetChunks([FromRoute] Guid documentId, CancellationToken ct)
+    {
+        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == documentId, ct);
+        if (document == null)
+        {
+            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
+        }
+
+        var chunks = await _db.DocumentChunks
+            .Where(chunk => chunk.DocumentId == documentId)
+            .OrderBy(chunk => chunk.ChunkIndex)
+            .Select(chunk => new
+            {
+                chunk.Id,
+                chunk.DocumentId,
+                chunk.ChunkIndex,
+                chunk.ChunkUid,
+                chunk.ChunkTitle,
+                chunk.HeadingPath,
+                chunk.SectionLevel,
+                chunk.Content,
+                chunk.ContentMarkdown,
+                chunk.ContentHash,
+                chunk.TokenCount,
+                chunk.CharCount,
+                chunk.StartOffset,
+                chunk.EndOffset,
+                chunk.PrevChunkId,
+                chunk.NextChunkId,
+                chunk.EmbeddingStatus,
+                chunk.EmbeddingModel,
+                chunk.IndexStatus,
+                chunk.Metadata,
+                chunk.CreatedAt,
+                chunk.UpdatedAt
+            })
+            .ToListAsync(ct);
+
+        return Ok(ApiResponse<object>.Ok(chunks, GetTraceId()));
+    }
+
+    [HttpGet("chunks/{chunkId:guid}")]
+    public async Task<IActionResult> GetChunk([FromRoute] Guid chunkId, CancellationToken ct)
+    {
+        var chunk = await _db.DocumentChunks.FirstOrDefaultAsync(item => item.Id == chunkId, ct);
+        if (chunk == null)
+        {
+            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Chunk not found", GetTraceId()));
+        }
+        return Ok(ApiResponse<object>.Ok(chunk, GetTraceId()));
+    }
+
+    [HttpGet("chunks/{chunkId:guid}/embedding")]
+    public async Task<IActionResult> GetChunkEmbedding([FromRoute] Guid chunkId, CancellationToken ct)
+    {
+        var embedding = await _db.ChunkEmbeddings
+            .Where(item => item.ChunkId == chunkId)
+            .OrderByDescending(item => item.UpdatedAt)
+            .Select(item => new
+            {
+                item.Id,
+                item.ChunkId,
+                item.Provider,
+                item.Model,
+                item.ModelVersion,
+                item.Dimension,
+                item.Status,
+                item.ErrorMessage,
+                item.RetryCount,
+                item.ChunkContentHash,
+                item.CreatedAt,
+                item.UpdatedAt
+            })
+            .FirstOrDefaultAsync(ct);
+        if (embedding == null)
+        {
+            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Chunk embedding not found", GetTraceId()));
+        }
+        return Ok(ApiResponse<object>.Ok(embedding, GetTraceId()));
+    }
+
     [HttpPost("{id:guid}/resummarize")]
     public async Task<IActionResult> Resummarize([FromRoute] Guid id, [FromBody] ResummarizeRequestDto? request, CancellationToken ct)
     {
@@ -86,8 +168,9 @@ public class DocumentsController : BaseController
     /// recommendation and persist new Tag + DocumentTag records.
     /// </summary>
     [HttpPost("~/api/workspaces/{workspaceId}/documents/{documentId}/actions/regenerate-tags")]
+    [HttpPost("~/api/documents/{documentId}/actions/regenerate-tags")]
     public async Task<IActionResult> RegenerateTags(
-        [FromRoute] Guid workspaceId,
+        [FromRoute] Guid? workspaceId,
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
@@ -110,8 +193,9 @@ public class DocumentsController : BaseController
     /// entity extraction and persist new Entity + DocumentEntity records.
     /// </summary>
     [HttpPost("~/api/workspaces/{workspaceId}/documents/{documentId}/actions/regenerate-entities")]
+    [HttpPost("~/api/documents/{documentId}/actions/regenerate-entities")]
     public async Task<IActionResult> RegenerateEntities(
-        [FromRoute] Guid workspaceId,
+        [FromRoute] Guid? workspaceId,
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
@@ -134,8 +218,9 @@ public class DocumentsController : BaseController
     /// ChunkStatus = "pending" so ChunkWorker picks it up again.
     /// </summary>
     [HttpPost("~/api/workspaces/{workspaceId}/documents/{documentId}/actions/rechunk")]
+    [HttpPost("~/api/documents/{documentId}/actions/rechunk")]
     public async Task<IActionResult> Rechunk(
-        [FromRoute] Guid workspaceId,
+        [FromRoute] Guid? workspaceId,
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
@@ -170,8 +255,9 @@ public class DocumentsController : BaseController
     /// on every document_chunk so EmbeddingWorker re-processes them.
     /// </summary>
     [HttpPost("~/api/workspaces/{workspaceId}/documents/{documentId}/actions/reembed")]
+    [HttpPost("~/api/documents/{documentId}/actions/reembed")]
     public async Task<IActionResult> Reembed(
-        [FromRoute] Guid workspaceId,
+        [FromRoute] Guid? workspaceId,
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
@@ -192,6 +278,10 @@ public class DocumentsController : BaseController
             chunk.EmbeddingStatus = "pending";
             chunk.UpdatedAt = now;
         }
+
+        document.EmbeddingStatus = "processing";
+        document.IndexStatus = "processing";
+        document.UpdatedAt = now;
 
         await _db.SaveChangesAsync(ct);
 

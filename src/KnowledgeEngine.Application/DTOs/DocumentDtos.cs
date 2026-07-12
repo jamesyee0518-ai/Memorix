@@ -20,7 +20,11 @@ public class DocumentListItem
     public int? QualityScore { get; set; }
     public string ParseStatus { get; set; } = "pending";
     public string CleanStatus { get; set; } = "pending";
+    public string ChunkStatus { get; set; } = "pending";
     public string IndexStatus { get; set; } = "pending";
+    public string TagStatus { get; set; } = "pending";
+    public string EntityStatus { get; set; } = "pending";
+    public string EmbeddingStatus { get; set; } = "pending";
 }
 
 public class DocumentDetail
@@ -70,7 +74,11 @@ public class DocumentDetail
     // Phase 3: Multi-stage status
     public string ParseStatus { get; set; } = "pending";
     public string CleanStatus { get; set; } = "pending";
+    public string ChunkStatus { get; set; } = "pending";
     public string IndexStatus { get; set; } = "pending";
+    public string TagStatus { get; set; } = "pending";
+    public string EntityStatus { get; set; } = "pending";
+    public string EmbeddingStatus { get; set; } = "pending";
 
     // Phase 3: Parser metadata
     public string? ParserName { get; set; }

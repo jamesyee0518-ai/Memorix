@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -124,11 +124,12 @@ function getFriendlyErrorMessage(errorMessage?: string): string {
 
 // ===== 信号项类型 =====
 
-interface SignalItem {
+interface SignalObject {
   type?: string;
   description?: string;
   confidence?: number;
 }
+type SignalItem = string | SignalObject;
 
 interface KeyPointItem {
   text?: string;
@@ -154,13 +155,15 @@ function SignalList({
           key={idx}
           className="flex items-start gap-2 rounded-lg border bg-muted/30 p-3"
         >
-          {item.type && (
+          {typeof item !== "string" && item.type && (
             <span className="mt-0.5 shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
               {item.type}
             </span>
           )}
-          <span className="flex-1 text-sm">{item.description}</span>
-          {item.confidence !== undefined && item.confidence !== null && (
+          <span className="flex-1 text-sm">
+            {typeof item === "string" ? item : item.description}
+          </span>
+          {typeof item !== "string" && item.confidence !== undefined && item.confidence !== null && (
             <span className="shrink-0 text-xs text-muted-foreground">
               置信度: {Math.round(item.confidence * 100)}%
             </span>
@@ -269,6 +272,7 @@ export default function DocumentDetailPage() {
   const [documentTags, setDocumentTags] = useState<DocumentTagItem[]>([]);
   const [showAddTag, setShowAddTag] = useState(false);
   const [newTagName, setNewTagName] = useState("");
+  const previousPipelineState = useRef<string | null>(null);
 
   // Fetch document tags separately for interactive management
   const { data: documentTagsData, refetch: refetchTags } = useQuery({
@@ -286,13 +290,54 @@ export default function DocumentDetailPage() {
     queryFn: () => documentApi.get(documentId),
     enabled: !!documentId,
     refetchInterval: (query) => {
-      const status = query.state.data?.aiStatus;
-      if (status === "pending" || status === "processing") {
-        return 5000;
-      }
-      return false;
+      const data = query.state.data;
+      if (!data) return false;
+      const activeStatuses = new Set(["pending", "processing", "queued", "stale", "indexing"]);
+      const hasActiveStage = [
+        data.parseStatus,
+        data.cleanStatus,
+        data.aiStatus,
+        data.chunkStatus,
+        data.embeddingStatus,
+        data.indexStatus,
+        data.tagStatus,
+        data.entityStatus,
+      ].some((status) => status && activeStatuses.has(status));
+      return hasActiveStage ? 3000 : false;
     },
   });
+
+  // 后台阶段状态变化后，联动刷新依赖面板并给出完成/失败反馈。
+  useEffect(() => {
+    if (!document) return;
+    const state = [
+      document.parseStatus,
+      document.cleanStatus,
+      document.aiStatus,
+      document.chunkStatus,
+      document.embeddingStatus,
+      document.indexStatus,
+      document.tagStatus,
+      document.entityStatus,
+    ].join("|");
+
+    if (previousPipelineState.current && previousPipelineState.current !== state) {
+      queryClient.invalidateQueries({ queryKey: ["index-state"] });
+      queryClient.invalidateQueries({ queryKey: ["document-chunks", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["processing-logs", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["document-tags", documentId] });
+
+      const stages = state.split("|");
+      if (stages.some((status) => status === "failed")) {
+        toast.error("处理阶段失败，请查看处理日志");
+      } else if (document.aiStatus === "done"
+        && document.chunkStatus === "done"
+        && document.indexStatus === "done") {
+        toast.success("文档处理与索引已完成");
+      }
+    }
+    previousPipelineState.current = state;
+  }, [document, documentId, queryClient]);
 
   // 从 QA 引用跳转过来时，切换到"分块调试"Tab 并滚动到对应分块
   useEffect(() => {
@@ -428,7 +473,12 @@ export default function DocumentDetailPage() {
           break;
       }
       toast.success("操作已触发");
-      queryClient.invalidateQueries({ queryKey: ["document", documentId] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["document", documentId] }),
+        queryClient.invalidateQueries({ queryKey: ["index-state"] }),
+        queryClient.invalidateQueries({ queryKey: ["document-chunks", documentId] }),
+        queryClient.invalidateQueries({ queryKey: ["processing-logs", documentId] }),
+      ]);
     } catch (err) {
       const message = err instanceof ApiRequestError ? err.message : "操作失败";
       toast.error(message);
@@ -464,7 +514,7 @@ export default function DocumentDetailPage() {
   const technicalSignals = parseJsonArray<SignalItem>(document.technicalSignals);
   const risks = parseJsonArray<SignalItem>(document.risks);
   const opportunities = parseJsonArray<SignalItem>(document.opportunities);
-  const reusableMaterials = parseJsonArray<Record<string, unknown>>(
+  const reusableMaterials = parseJsonArray<string | Record<string, unknown>>(
     document.reusableMaterials
   );
 
@@ -769,7 +819,7 @@ export default function DocumentDetailPage() {
                         className="rounded-lg border bg-muted/30 p-3 text-sm"
                       >
                         <pre className="whitespace-pre-wrap font-sans">
-                          {JSON.stringify(item, null, 2)}
+                          {typeof item === "string" ? item : JSON.stringify(item, null, 2)}
                         </pre>
                       </li>
                     ))}

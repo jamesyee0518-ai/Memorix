@@ -9,7 +9,7 @@ namespace KnowledgeEngine.Infrastructure.Processing;
 /// </summary>
 public class SummaryPromptManager : ISummaryPromptManager
 {
-    private const string PromptVersion = "summary_v1";
+    private const string PromptVersion = "summary_v2";
 
     private static readonly string SystemPrompt =
         "你是一个知识资产整理助手。请基于用户提供的文档内容，生成结构化中文摘要。\n\n" +
@@ -21,7 +21,13 @@ public class SummaryPromptManager : ISummaryPromptManager
         "5. key_points 输出 3-8 条，每条包含 text、importance、evidence。\n" +
         "6. value_score 为 0-100 的整数，表示该资料对长期知识资产的价值。\n" +
         "7. recommended_tags 输出 3-8 个标签。\n" +
-        "8. should_deep_process 表示是否值得进入后续分块、向量化和深度分析。\n\n" +
+        "8. business_signals 提取商业模式、市场、用户、增长、竞争、成本或收入等信号。\n" +
+        "9. technical_signals 提取架构、协议、模型、算法、工程实践、性能或安全等信号。\n" +
+        "10. risks 提取文中明确或可以由原文直接推导的风险、约束和不确定性。\n" +
+        "11. opportunities 提取可行动的产品、市场、研究或技术机会。\n" +
+        "12. reusable_materials 提取可直接复用的观点、方法、框架、数据、案例或文案。\n" +
+        "13. 上述五个数组必须始终返回；每项用一条完整、具体的中文短句。确实没有时才返回空数组，不得因资料类型而省略字段。\n" +
+        "14. should_deep_process 表示是否值得进入后续分块、向量化和深度分析。\n\n" +
         "评分参考：\n" +
         "- 90-100：高价值资料，适合长期保存和深度研究。\n" +
         "- 70-89：有明显价值，适合进入知识库。\n" +
@@ -58,6 +64,11 @@ public class SummaryPromptManager : ISummaryPromptManager
   ""key_points"": [
     {{""text"": """", ""importance"": ""high|medium|low"", ""evidence"": """"}}
   ],
+  ""business_signals"": [""具体商业信号""],
+  ""technical_signals"": [""具体技术信号""],
+  ""risks"": [""具体风险或约束""],
+  ""opportunities"": [""具体机会""],
+  ""reusable_materials"": [""可直接复用的内容或方法""],
   ""value_score"": 0,
   ""value_score_reason"": """",
   ""recommended_tags"": [],

@@ -113,6 +113,10 @@ export function IndexStatePanel() {
   const { data: state, isLoading, error } = useQuery({
     queryKey: ["index-state"],
     queryFn: () => indexApi.getState(),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "indexing" || status === "rebuilding" ? 3000 : false;
+    },
   });
 
   const handleRebuild = async () => {

@@ -1,32 +1,39 @@
+# macOS
 .DS_Store
-.codebase-memory/
-.logs/
-.uploads/
 
-**/node_modules/
-**/.next/
-**/out/
-**/coverage/
+# Editors
+.idea/
+.vscode/
+
+# .NET
 **/bin/
 **/obj/
-**/target/
+*.user
+*.suo
 
-!desktop/src-tauri/resources/bin/
-!desktop/src-tauri/resources/bin/**
+# Node / Next.js
+**/node_modules/
+web/.next/
+web/out/
+*.tsbuildinfo
 
+# Desktop packaging outputs
+desktop/release/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
 desktop/src-tauri/resources/api/
-desktop/src-tauri/resources/node/
 desktop/src-tauri/resources/web/
 
-*.db
-*.db-shm
-*.db-wal
-*.log
-*.tsbuildinfo
+# Local runtime data and secrets
 .env
 .env.*
 !.env.example
-
-desktop/src-tauri/bundle/
-desktop/src-tauri/gen/
-desktop/dist/
+*.db
+*.db-shm
+*.db-wal
+logs/
+.logs/
+.codebase-memory/
+research-memory-engine/.next/
+research-memory-engine/.npm-cache/

@@ -299,7 +299,11 @@ export function ImportDialog({
           <span className="ml-1 text-xs text-muted-foreground">（可选）</span>
         )}
       </Label>
-      <Select value={value ?? ""} onValueChange={(v) => onChange(v as string)}>
+      <Select
+        value={value ?? ""}
+        items={Object.fromEntries(topics.map((topic) => [topic.id, topic.name]))}
+        onValueChange={(v) => onChange(v as string)}
+      >
         <SelectTrigger className="w-full">
           <SelectValue
             placeholder={

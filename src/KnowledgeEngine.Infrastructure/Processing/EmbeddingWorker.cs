@@ -73,7 +73,10 @@ public class EmbeddingWorker : BackgroundService
             // Find chunks with embedding_status = "pending" OR "stale" (batch of BatchSize).
             // "stale" chunks are produced by IVectorStore.RebuildAsync and must be re-embedded.
             pendingChunks = await db.DocumentChunks
-                .Where(c => c.EmbeddingStatus == "pending" || c.EmbeddingStatus == "stale")
+                .Where(c => c.EmbeddingStatus == "pending"
+                    || c.EmbeddingStatus == "stale"
+                    || (c.EmbeddingStatus == "failed"
+                        && db.Documents.Any(d => d.Id == c.DocumentId && d.EmbeddingStatus == "pending")))
                 .OrderBy(c => c.CreatedAt)
                 .Take(BatchSize)
                 .ToListAsync(ct);
@@ -229,8 +232,20 @@ public class EmbeddingWorker : BackgroundService
     {
         try
         {
-            // Write embedding vector to document_chunks via raw SQL (pgvector column not mapped by EF Core)
-            await WriteEmbeddingAsync(appDbContext, chunk.Id, embedding, model, ct);
+            var isSqlite = appDbContext.Database.IsSqlite();
+
+            // PostgreSQL stores the searchable pgvector directly on the chunk.
+            // SQLite has no vector column; its canonical local representation is
+            // chunk_embeddings.embedding_json, consumed by LocalVectorStore.
+            if (!isSqlite)
+            {
+                await WriteEmbeddingAsync(appDbContext, chunk.Id, embedding, model, ct);
+            }
+
+            if (isSqlite)
+            {
+                await UpsertChunkEmbeddingAsync(db, chunk, embedding, provider, model, ct);
+            }
 
             // Update chunk status to done
             chunk.EmbeddingStatus = "done";
@@ -238,15 +253,20 @@ public class EmbeddingWorker : BackgroundService
             chunk.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            // Keep the chunk_embeddings table in sync (non-fatal on failure)
-            try
+            // Keep the auxiliary JSON table in sync for cloud mode too.
+            if (!isSqlite)
             {
-                await UpsertChunkEmbeddingAsync(db, chunk, embedding, provider, model, ct);
+                try
+                {
+                    await UpsertChunkEmbeddingAsync(db, chunk, embedding, provider, model, ct);
+                }
+                catch (Exception syncEx)
+                {
+                    _logger.LogWarning(syncEx, "EmbeddingWorker failed to sync chunk_embeddings for chunk {ChunkId}", chunk.Id);
+                }
             }
-            catch (Exception syncEx)
-            {
-                _logger.LogWarning(syncEx, "EmbeddingWorker failed to sync chunk_embeddings for chunk {ChunkId}", chunk.Id);
-            }
+
+            await UpdateDocumentEmbeddingStatusAsync(db, chunk.DocumentId, ct);
 
             _logger.LogDebug("EmbeddingWorker embedded chunk {ChunkId}", chunk.Id);
         }
@@ -267,11 +287,35 @@ public class EmbeddingWorker : BackgroundService
         try
         {
             await db.SaveChangesAsync(ct);
+            await UpdateDocumentEmbeddingStatusAsync(db, chunk.DocumentId, ct);
         }
         catch (Exception saveEx)
         {
             _logger.LogError(saveEx, "Failed to save error state for chunk {ChunkId}", chunk.Id);
         }
+    }
+
+    private static async Task UpdateDocumentEmbeddingStatusAsync(
+        IAppDbContext db,
+        Guid documentId,
+        CancellationToken ct)
+    {
+        var statuses = await db.DocumentChunks
+            .Where(chunk => chunk.DocumentId == documentId)
+            .Select(chunk => chunk.EmbeddingStatus)
+            .ToListAsync(ct);
+        var document = await db.Documents.FirstOrDefaultAsync(doc => doc.Id == documentId, ct);
+        if (document == null || statuses.Count == 0) return;
+
+        document.EmbeddingStatus = statuses.All(status => status == "done")
+            ? "done"
+            : statuses.Any(status => status == "failed")
+                && statuses.All(status => status is "done" or "failed")
+                ? "failed"
+                : "processing";
+        document.IndexStatus = document.EmbeddingStatus;
+        document.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>

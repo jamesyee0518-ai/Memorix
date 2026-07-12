@@ -240,7 +240,11 @@ public static class Mapper
             // Phase 3: Multi-stage status
             ParseStatus = doc.ParseStatus,
             CleanStatus = doc.CleanStatus,
+            ChunkStatus = doc.ChunkStatus,
             IndexStatus = doc.IndexStatus,
+            TagStatus = doc.TagStatus,
+            EntityStatus = doc.EntityStatus,
+            EmbeddingStatus = doc.EmbeddingStatus,
             // Phase 3: Parser metadata
             ParserName = doc.ParserName,
             ParserVersion = doc.ParserVersion,

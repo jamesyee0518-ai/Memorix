@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Settings;
+using KnowledgeEngine.Infrastructure.Runtime;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -10,7 +11,7 @@ namespace KnowledgeEngine.Infrastructure.Processing;
 
 public class AISummaryService : IAISummaryService
 {
-    private readonly ILlmService _llmService;
+    private readonly RuntimeRouter _runtimeRouter;
     private readonly ISummaryPromptManager _promptManager;
     private readonly LlmSettings _llmSettings;
     private readonly ILogger<AISummaryService> _logger;
@@ -32,12 +33,12 @@ public class AISummaryService : IAISummaryService
         "\n\n重要：你必须只返回纯JSON，不要包含任何其他文字。不要包含markdown代码块标记。";
 
     public AISummaryService(
-        ILlmService llmService,
+        RuntimeRouter runtimeRouter,
         ISummaryPromptManager promptManager,
         IOptions<LlmSettings> llmSettings,
         ILogger<AISummaryService> logger)
     {
-        _llmService = llmService;
+        _runtimeRouter = runtimeRouter;
         _promptManager = promptManager;
         _llmSettings = llmSettings.Value;
         _logger = logger;
@@ -56,7 +57,7 @@ public class AISummaryService : IAISummaryService
         // §15.5 three-strategy retry: (1) first attempt, (2) repair JSON, (3) strict prompt.
         // rawOutput is captured from the LLM call so it can be repaired on parse failure.
         string rawOutput = string.Empty;
-        LlmResult llmResult;
+        LlmResult? llmResult = null;
 
         // First attempt
         try
@@ -65,7 +66,7 @@ public class AISummaryService : IAISummaryService
             rawOutput = llmResult.Content;
             var analysis = ParseAnalysisResponse(rawOutput);
             ValidateAnalysisResponse(analysis);
-            return BuildResult(analysis, llmResult, promptVersion);
+            return BuildResult(analysis, llmResult ?? MakePlaceholderResult(rawOutput), promptVersion);
         }
         catch (JsonException ex)
         {
@@ -80,7 +81,7 @@ public class AISummaryService : IAISummaryService
             ValidateAnalysisResponse(analysis);
             _logger.LogWarning("Recovered malformed LLM JSON via JSON repair on second attempt.");
             // Token usage from the original (first) call is the best we have
-            return BuildResult(analysis, MakePlaceholderResult(rawOutput), promptVersion);
+            return BuildResult(analysis, llmResult ?? MakePlaceholderResult(rawOutput), promptVersion);
         }
         catch (Exception ex)
         {
@@ -103,7 +104,9 @@ public class AISummaryService : IAISummaryService
     /// </summary>
     private async Task<LlmResult> CallLlmAsync(string systemPrompt, string userPrompt, string? model, CancellationToken ct)
     {
-        var llmResult = await _llmService.CompleteAsync(systemPrompt, userPrompt, model, ct);
+        var provider = await _runtimeRouter.GetModelProviderAsync(ct);
+        // Passing null lets the routed provider use the workspace-specific model.
+        var llmResult = await provider.ChatAsync(systemPrompt, userPrompt, null, ct);
 
         _logger.LogInformation("LLM response received: inputTokens={Input}, outputTokens={Output}, model={Model}",
             llmResult.InputTokens, llmResult.OutputTokens, llmResult.Model);
@@ -264,6 +267,17 @@ public class AISummaryService : IAISummaryService
 
         if (analysis.RecommendedTags == null)
             errors.Add("recommended_tags is null");
+
+        if (analysis.BusinessSignals == null)
+            errors.Add("business_signals is null");
+        if (analysis.TechnicalSignals == null)
+            errors.Add("technical_signals is null");
+        if (analysis.Risks == null)
+            errors.Add("risks is null");
+        if (analysis.Opportunities == null)
+            errors.Add("opportunities is null");
+        if (analysis.ReusableMaterials == null)
+            errors.Add("reusable_materials is null");
 
         if (errors.Count > 0)
             throw new InvalidOperationException($"AI output validation failed: {string.Join(", ", errors)}");

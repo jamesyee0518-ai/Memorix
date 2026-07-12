@@ -286,7 +286,11 @@ export function ReportGenerateDialog({
   }) => (
     <div className="space-y-2">
       <Label>所属专题</Label>
-      <Select value={value} onValueChange={(v) => onChange(v as string)}>
+      <Select
+        value={value}
+        items={Object.fromEntries(topics.map((topic) => [topic.id, topic.name]))}
+        onValueChange={(v) => onChange(v as string)}
+      >
         <SelectTrigger className="w-full">
           <SelectValue placeholder="请选择专题" />
         </SelectTrigger>

@@ -2,6 +2,7 @@ using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Settings;
 using KnowledgeEngine.Infrastructure.Ai;
 using KnowledgeEngine.Infrastructure.Storage;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -153,39 +154,103 @@ public class RuntimeRouter
             var mode = ws?.Mode ?? "cloud";
             var providerName = ws?.ModelProvider ?? "lmstudio";
 
-            var llm = _serviceProvider.GetRequiredService<ILlmService>();
+            var configuredLlm = _serviceProvider.GetRequiredService<IOptions<LlmSettings>>().Value;
             var embedding = _serviceProvider.GetRequiredService<IEmbeddingService>();
-            var llmSettings = _serviceProvider.GetRequiredService<IOptions<LlmSettings>>();
+            var routedSettings = new LlmSettings
+            {
+                Endpoint = configuredLlm.Endpoint,
+                ApiKey = configuredLlm.ApiKey,
+                Model = configuredLlm.Model,
+                MaxTokens = configuredLlm.MaxTokens
+            };
             var embeddingSettings = _serviceProvider.GetRequiredService<IOptions<EmbeddingSettings>>();
             var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();
             var logger = _serviceProvider.GetRequiredService<ILogger<UnifiedModelProvider>>();
 
+            ApplyWorkspaceModelConfig(ws?.ModelConfig, routedSettings);
+
             if (mode == "local" || mode == "hybrid")
             {
-                // Local mode: auto-detect local model service
-                var detected = await DetectLocalModelProviderAsync(httpClientFactory, ct);
-                if (!string.IsNullOrEmpty(detected))
+                // Respect an explicitly selected provider. Auto-detection is only
+                // used for an unset/auto selection, so Ollama cannot unexpectedly
+                // override a workspace configured for LM Studio (or vice versa).
+                if (string.IsNullOrWhiteSpace(providerName) || providerName == "auto")
                 {
+                    var detected = await DetectLocalModelProviderAsync(httpClientFactory, ct);
+                    if (string.IsNullOrEmpty(detected))
+                    {
+                        throw new InvalidOperationException("No local model provider is running (checked Ollama and LM Studio)");
+                    }
                     providerName = detected;
-                    _logger.LogInformation("RuntimeRouter: local mode → {Provider} detected at {Endpoint}", providerName, llmSettings.Value.Endpoint);
                 }
-                else
+
+                if (!HasExplicitBaseUrl(ws?.ModelConfig))
                 {
-                    _logger.LogWarning("RuntimeRouter: local mode but no local model service detected, using configured provider={Provider}", providerName);
+                    routedSettings.Endpoint = DefaultEndpoint(providerName);
                 }
+                _logger.LogInformation("RuntimeRouter: local mode → {Provider} at {Endpoint}", providerName, routedSettings.Endpoint);
             }
             else
             {
                 // Cloud mode: use configured cloud API provider
-                _logger.LogInformation("RuntimeRouter: cloud mode → provider={Provider} at {Endpoint}", providerName, llmSettings.Value.Endpoint);
+                _logger.LogInformation("RuntimeRouter: cloud mode → provider={Provider} at {Endpoint}", providerName, routedSettings.Endpoint);
             }
 
-            return new UnifiedModelProvider(llm, embedding, llmSettings, embeddingSettings, httpClientFactory, logger, providerName);
+            var llmClient = httpClientFactory.CreateClient(nameof(OpenAiLlmService));
+            var llmLogger = _serviceProvider.GetRequiredService<ILogger<OpenAiLlmService>>();
+            var llm = new OpenAiLlmService(llmClient, Options.Create(routedSettings), llmLogger);
+            return new UnifiedModelProvider(llm, embedding, Options.Create(routedSettings), embeddingSettings, httpClientFactory, logger, providerName);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "RuntimeRouter: failed to resolve model provider");
             throw new InvalidOperationException($"Failed to resolve model provider: {ex.Message}", ex);
+        }
+    }
+
+    private static string DefaultEndpoint(string providerName) => providerName.ToLowerInvariant() switch
+    {
+        "ollama" => "http://localhost:11434",
+        "lmstudio" => "http://localhost:1234",
+        "openai" => "https://api.openai.com",
+        _ => "http://localhost:1234"
+    };
+
+    private static bool HasExplicitBaseUrl(string? modelConfig)
+    {
+        if (string.IsNullOrWhiteSpace(modelConfig)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(modelConfig);
+            return document.RootElement.TryGetProperty("baseUrl", out var value)
+                && value.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(value.GetString());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void ApplyWorkspaceModelConfig(string? modelConfig, LlmSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(modelConfig)) return;
+        JsonDocument document;
+        try { document = JsonDocument.Parse(modelConfig); }
+        catch (JsonException) { return; }
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.TryGetProperty("baseUrl", out var baseUrl)
+                && baseUrl.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(baseUrl.GetString()))
+                settings.Endpoint = baseUrl.GetString()!;
+            if (root.TryGetProperty("apiKey", out var apiKey) && apiKey.ValueKind == JsonValueKind.String)
+                settings.ApiKey = apiKey.GetString() ?? string.Empty;
+            if (root.TryGetProperty("chatModel", out var chatModel)
+                && chatModel.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(chatModel.GetString()))
+                settings.Model = chatModel.GetString()!;
         }
     }
 
