@@ -81,7 +81,11 @@ export default function EntitiesPage() {
                 onValueChange={(v) => setEntityTypeFilter(v as string)}
               >
                 <SelectTrigger size="sm" className="w-32">
-                  <SelectValue placeholder="类型筛选" />
+                  <SelectValue placeholder="类型筛选">
+                    {entityTypeFilter === "all"
+                      ? "全部类型"
+                      : getEntityTypeLabel(entityTypeFilter)}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部类型</SelectItem>

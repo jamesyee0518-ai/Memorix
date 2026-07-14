@@ -193,6 +193,16 @@ public class DocumentDto
     public string? ContentMarkdown { get; set; }
     public string? ContentText { get; set; }
     public string? Summary { get; set; }
+    public string? TitleOriginal { get; set; }
+    public string? TitleZh { get; set; }
+    public string? PrimaryLanguage { get; set; }
+    public string? LanguageDistribution { get; set; }
+    public bool IsMultilingual { get; set; }
+    public string LocalizationStrategy { get; set; } = "none";
+    public string LocalizationLevel { get; set; } = "L1";
+    public string LanguageDetectStatus { get; set; } = "pending";
+    public string LocalizationStatus { get; set; } = "pending";
+    public string? ContentHash { get; set; }
     public string AiStatus { get; set; } = "pending";
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -463,6 +473,16 @@ public class ChunkDto
     public int ChunkIndex { get; set; }
     public string? ChunkTitle { get; set; }
     public string Content { get; set; } = string.Empty;
+    public string ContentOriginal { get; set; } = string.Empty;
+    public string? ContentNormalized { get; set; }
+    public string? DetectedLanguage { get; set; }
+    public double? LanguageConfidence { get; set; }
+    public string? LanguageDistribution { get; set; }
+    public string ContentType { get; set; } = "paragraph";
+    public string ProcessingRoute { get; set; } = "review";
+    public bool LocalizationRequired { get; set; }
+    public string? ChunkGroupId { get; set; }
+    public string? ParentChunkId { get; set; }
     public int TokenCount { get; set; }
     public int CharCount { get; set; }
     // Phase 4 fields

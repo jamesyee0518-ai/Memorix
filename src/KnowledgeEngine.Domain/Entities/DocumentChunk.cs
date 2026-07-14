@@ -12,6 +12,19 @@ public class DocumentChunk
     public string? ChunkTitle { get; set; }
     public string Content { get; set; } = string.Empty;
     public string? ContentMarkdown { get; set; }
+    public string ContentOriginal { get; set; } = string.Empty;
+    public string? ContentNormalized { get; set; }
+    public string? DetectedLanguage { get; set; }
+    public decimal? LanguageConfidence { get; set; }
+    public string? LanguageDistribution { get; set; }
+    public string ContentType { get; set; } = "paragraph";
+    public string ProcessingRoute { get; set; } = "review";
+    public bool LocalizationRequired { get; set; }
+    public Guid? ChunkGroupId { get; set; }
+    public Guid? ParentChunkId { get; set; }
+    public int? ParagraphStart { get; set; }
+    public int? ParagraphEnd { get; set; }
+    public string? BoundingBox { get; set; }
 
     public int? TokenCount { get; set; }
     public int? CharCount { get; set; }

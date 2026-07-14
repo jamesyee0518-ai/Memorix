@@ -173,6 +173,24 @@ public class ReportsController : BaseController
         return Ok(ApiResponse<object>.Ok(result.Data!, GetTraceId()));
     }
 
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await _reportService.DeleteAsync(userId.Value, id, ct);
+        if (!result.Success)
+        {
+            return Ok(ApiResponse<object>.Fail(result.Error!.Code, result.Error!.Message, GetTraceId()));
+        }
+
+        return Ok(ApiResponse<object>.Ok(result.Data!, GetTraceId()));
+    }
+
     [HttpGet("jobs/{jobId:guid}")]
     public async Task<IActionResult> GetJobStatus([FromRoute] Guid jobId, CancellationToken ct)
     {

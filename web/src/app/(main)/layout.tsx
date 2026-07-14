@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   FolderOpen,
@@ -27,6 +28,11 @@ import {
   Tag,
   FileDown,
   Bot,
+  Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ChevronsUpDown,
+  Languages,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
@@ -53,6 +59,7 @@ const navItems = [
   { href: "/qa", label: "问答", icon: MessageCircle },
   { href: "/topics", label: "专题", icon: FolderOpen },
   { href: "/documents", label: "文档", icon: FileText },
+  { href: "/knowledge-graph", label: "图谱", icon: Network },
   { href: "/reports", label: "报告", icon: ClipboardList },
   { href: "/exports", label: "导出", icon: FileDown },
   { href: "/entities", label: "实体", icon: Boxes },
@@ -63,6 +70,7 @@ const navItems = [
 const settingsSubItems = [
   { href: "/settings/workspace", label: "工作区", icon: Layers },
   { href: "/settings/model-config", label: "模型配置", icon: Cpu },
+  { href: "/settings/terminology", label: "术语库", icon: Languages },
   { href: "/settings/runtime", label: "运行时状态", icon: Activity },
   { href: "/settings/api-keys", label: "API Key", icon: KeyRound },
   { href: "/settings/agents", label: "Agent 接入", icon: Bot },
@@ -79,6 +87,7 @@ export default function AppLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const queryClient = useQueryClient();
   const {
     user,
     isAuthenticated,
@@ -92,6 +101,29 @@ export default function AppLayout({
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [switching, setSwitching] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    const desktop = "__TAURI_INTERNALS__" in window;
+    setIsDesktop(desktop);
+    if (desktop) {
+      setSidebarCollapsed(window.localStorage.getItem("memorix.desktop.sidebar-collapsed") === "true");
+      document.documentElement.classList.add("memorix-desktop-shell");
+      document.body.classList.add("memorix-desktop-shell");
+    }
+
+    return () => {
+      document.documentElement.classList.remove("memorix-desktop-shell");
+      document.body.classList.remove("memorix-desktop-shell");
+    };
+  }, []);
+
+  const toggleDesktopSidebar = () => {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    window.localStorage.setItem("memorix.desktop.sidebar-collapsed", String(next));
+  };
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -159,12 +191,18 @@ export default function AppLayout({
 
   const handleSwitchWorkspace = async (id: string) => {
     if (currentWorkspace?.id === id) return;
+    const targetWorkspace = workspaces.find((workspace) => workspace.id === id);
+    if (!targetWorkspace) {
+      toast.error("所选工作区不存在，请刷新后重试");
+      return;
+    }
     setSwitching(true);
     try {
       await workspaceApi.switch(id);
+      setCurrentWorkspace(targetWorkspace);
+      await queryClient.invalidateQueries();
+      router.refresh();
       toast.success("工作区已切换");
-      // 刷新页面以加载新工作区的数据
-      window.location.reload();
     } catch (err) {
       const message =
         err instanceof ApiRequestError ? err.message : "切换工作区失败";
@@ -197,10 +235,79 @@ export default function AppLayout({
     user?.email ?? (isLocalAnonymous ? "local@knowledge-engine.local" : "");
   const initials = displayName.charAt(0).toUpperCase() || "U";
 
+  if (isDesktop) {
+    return (
+      <div className="fixed inset-0 flex min-h-0 min-w-0 overflow-hidden overscroll-none bg-[#f5f5f4] text-[#2f2f2f]">
+        <aside className={cn(
+          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-r border-[#d8d6d1] bg-[#ebe9e4] transition-[width] duration-200",
+          sidebarCollapsed ? "w-14" : "w-56",
+        )}>
+          <div className={cn("flex h-14 items-center border-b border-[#d8d6d1]", sidebarCollapsed ? "justify-center" : "justify-between px-3")}>
+            {!sidebarCollapsed && (
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xl font-extrabold tracking-tight text-black">
+                  Memorix
+                </div>
+                <div className="truncate text-[11px] leading-tight text-[#65625d]">
+                  个人的 AI 记忆体
+                </div>
+              </div>
+            )}
+            <button type="button" onClick={toggleDesktopSidebar} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+              className="flex size-9 shrink-0 items-center justify-center rounded-md text-[#6f6c66] hover:bg-black/5 hover:text-[#34322f]">
+              {sidebarCollapsed ? <PanelLeftOpen className="size-[18px]" /> : <PanelLeftClose className="size-[18px]" />}
+            </button>
+          </div>
+
+          <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+            {navItems.filter((item) => item.href !== "/settings").map((item) => {
+              const Icon = item.icon;
+              const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
+              return <Link key={item.href} href={item.href} title={sidebarCollapsed ? item.label : undefined}
+                className={cn("flex h-9 items-center rounded-md text-sm transition-colors", sidebarCollapsed ? "justify-center" : "gap-3 px-2.5",
+                  active ? "bg-[#d7d4ce] font-medium text-[#232220]" : "text-[#65625d] hover:bg-black/5 hover:text-[#34322f]") }>
+                <Icon className="size-[17px] shrink-0" />{!sidebarCollapsed && <span>{item.label}</span>}
+              </Link>;
+            })}
+          </nav>
+
+          <div className="shrink-0 space-y-0.5 border-t border-[#d8d6d1] p-2">
+            <button type="button" onClick={() => openFeedback()} title={sidebarCollapsed ? "反馈" : undefined}
+              className={cn("flex h-9 w-full items-center rounded-md text-sm text-[#65625d] hover:bg-black/5 hover:text-[#34322f]", sidebarCollapsed ? "justify-center" : "gap-3 px-2.5")}>
+              <MessageSquare className="size-[17px]" />{!sidebarCollapsed && <span>反馈</span>}
+            </button>
+            <Link href="/settings" title={sidebarCollapsed ? "设置" : undefined}
+              className={cn("flex h-9 items-center rounded-md text-sm text-[#65625d] hover:bg-black/5 hover:text-[#34322f]", sidebarCollapsed ? "justify-center" : "gap-3 px-2.5",
+                pathname.startsWith("/settings") && "bg-[#d7d4ce] font-medium text-[#232220]")}>
+              <Settings className="size-[17px]" />{!sidebarCollapsed && <span>设置</span>}
+            </Link>
+            {currentWorkspace && (
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<button type="button" disabled={switching} title={sidebarCollapsed ? currentWorkspace.name : undefined}
+                  className={cn("flex min-h-11 w-full items-center rounded-md text-left hover:bg-black/5", sidebarCollapsed ? "justify-center" : "gap-2.5 px-2")} />}>
+                  <Layers className="size-[17px] shrink-0 text-[#65625d]" />
+                  {!sidebarCollapsed && <><div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{switching ? "切换中…" : currentWorkspace.name}</div><div className="text-[11px] text-[#85817a]">{workspaceMode === "local" ? "本地工作区" : workspaceMode === "cloud" ? "云端工作区" : "混合工作区"}</div></div><ChevronsUpDown className="size-4 shrink-0 text-[#85817a]" /></>}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="right" align="end" className="w-56"><DropdownMenuLabel>切换工作区</DropdownMenuLabel><DropdownMenuSeparator />{workspaces.map((ws) => <DropdownMenuItem key={ws.id} onClick={() => handleSwitchWorkspace(ws.id)}><span className="min-w-0 flex-1 truncate">{ws.name}</span>{ws.id === currentWorkspace.id && <span className="text-xs text-muted-foreground">当前</span>}</DropdownMenuItem>)}</DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+        </aside>
+
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+          <main className="h-full min-h-0 min-w-0 overflow-auto overscroll-none p-5 [scrollbar-gutter:stable]">
+            {children}
+          </main>
+        </div>
+        <FeedbackDialog />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-screen">
+    <div className="fixed inset-0 flex min-h-0 min-w-0 overflow-hidden overscroll-none">
       {/* 侧边栏 */}
-      <aside className="flex w-60 flex-col bg-[#0D47A1] text-white/80">
+      <aside className="flex h-full min-h-0 w-60 shrink-0 flex-col overflow-hidden bg-[#0D47A1] text-white/80">
         {/* Logo */}
         <div className="flex h-16 items-center gap-2 border-b border-white/15 px-5">
           <MemorixBrand inverted className="min-w-0 flex-1" />
@@ -384,9 +491,9 @@ export default function AppLayout({
       </aside>
 
       {/* 主内容区 */}
-      <div className="flex flex-1 flex-col overflow-hidden bg-[#F2F4F7]">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[#F2F4F7]">
         {/* 顶部栏 */}
-        <header className="flex h-16 items-center justify-between border-b border-[#DBE2EA] bg-white px-6">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#DBE2EA] bg-white px-6">
           <div className="flex items-center gap-2">
             <UserIcon className="size-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
@@ -422,7 +529,9 @@ export default function AppLayout({
         </header>
 
         {/* 页面内容 */}
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-none p-6 [scrollbar-gutter:stable]">
+          {children}
+        </main>
       </div>
 
       {/* 全局反馈弹窗 */}

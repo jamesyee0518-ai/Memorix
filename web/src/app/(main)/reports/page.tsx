@@ -94,6 +94,7 @@ export default function ReportsPage() {
 
   // 重新生成中
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTopics().catch(() => {});
@@ -162,9 +163,20 @@ export default function ReportsPage() {
     }
   };
 
-  // 删除（暂无 API，提示用户）
-  const handleDelete = () => {
-    toast.info("暂不支持删除报告");
+  const handleDelete = async (reportId: string) => {
+    if (!window.confirm("确定要删除这份报告吗？此操作无法撤销。")) return;
+
+    setDeletingId(reportId);
+    try {
+      await reportApi.delete(reportId);
+      await queryClient.invalidateQueries({ queryKey: ["reports"] });
+      toast.success("报告已删除");
+    } catch (err) {
+      const message = err instanceof ApiRequestError ? err.message : "删除报告失败";
+      toast.error(message);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -221,7 +233,11 @@ export default function ReportsPage() {
                 onValueChange={(v) => setTopicFilter(v as string)}
               >
                 <SelectTrigger size="sm" className="w-40">
-                  <SelectValue placeholder="专题筛选" />
+                  <SelectValue placeholder="专题筛选">
+                    {topicFilter === "all"
+                      ? "全部专题"
+                      : topicMap.get(topicFilter) ?? "未知专题"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部专题</SelectItem>
@@ -237,7 +253,17 @@ export default function ReportsPage() {
                 onValueChange={(v) => setTypeFilter(v as string)}
               >
                 <SelectTrigger size="sm" className="w-32">
-                  <SelectValue placeholder="报告类型" />
+                  <SelectValue placeholder="报告类型">
+                    {typeFilter === "all"
+                      ? "全部类型"
+                      : typeFilter === "daily"
+                        ? "日报"
+                        : typeFilter === "weekly"
+                          ? "周报"
+                          : typeFilter === "topic"
+                            ? "专题报告"
+                            : "未知类型"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部类型</SelectItem>
@@ -343,9 +369,14 @@ export default function ReportsPage() {
                           variant="ghost"
                           size="icon-sm"
                           title="删除"
-                          onClick={handleDelete}
+                          disabled={deletingId === report.id}
+                          onClick={() => handleDelete(report.id)}
                         >
-                          <Trash2 className="size-3.5 text-muted-foreground" />
+                          {deletingId === report.id ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3.5 text-muted-foreground" />
+                          )}
                         </Button>
                       </div>
                     </TableCell>

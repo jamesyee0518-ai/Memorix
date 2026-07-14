@@ -171,6 +171,8 @@ export interface SourceListParams {
   topicId?: string;
   status?: SourceStatus;
   sourceType?: SourceType;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface UrlImportRequest {
@@ -212,6 +214,9 @@ export interface DocumentListItem {
   topicId?: string;
   title: string;
   summary?: string;
+  titleOriginal?: string;
+  titleZh?: string;
+  summaryZh?: string;
   aiStatus: string;
   valueScore?: number;
   qualityScore?: number;
@@ -220,6 +225,15 @@ export interface DocumentListItem {
   parseStatus?: string;
   cleanStatus?: string;
   indexStatus?: string;
+  primaryLanguage?: string;
+  isMultilingual?: boolean;
+  localizationLevel?: string;
+  languageDetectStatus?: string;
+  localizationStatus?: string;
+  localizedAt?: string;
+  localizationQualityScore?: number;
+  localizationQualityIssues?: string;
+  glossaryVersion?: string;
   createdAt: string;
 }
 
@@ -259,6 +273,25 @@ export interface DocumentDetail {
   contentMarkdown?: string;
   contentText?: string;
   language?: string;
+  titleOriginal?: string;
+  titleZh?: string;
+  summaryZh?: string;
+  keywordsZh?: string;
+  primaryLanguage?: string;
+  languageDistribution?: string;
+  isMultilingual?: boolean;
+  localizationStrategy?: string;
+  localizationLevel?: string;
+  languageDetectStatus?: string;
+  localizationStatus?: string;
+  enrichmentStatus?: string;
+  fulltextIndexStatus?: string;
+  localizationModel?: string;
+  localizationPromptVersion?: string;
+  localizedAt?: string;
+  localizationQualityScore?: number;
+  localizationQualityIssues?: string;
+  glossaryVersion?: string;
   wordCount?: number;
   summary?: string;
   oneSentenceConclusion?: string;
@@ -395,6 +428,21 @@ export interface Tag {
   updatedAt?: string;
 }
 
+export interface Terminology {
+  id: string;
+  sourceLanguage: string;
+  sourceTerm: string;
+  targetLanguage: string;
+  targetTerm: string;
+  aliases?: string;
+  domain?: string;
+  priority: number;
+  reviewStatus: string;
+  version: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // ===== AI任务 =====
 
 export interface AiJobListItem {
@@ -429,6 +477,9 @@ export interface SearchRequest {
   searchType: "keyword" | "vector" | "hybrid";
   filters?: SearchFilters;
   limit?: number;
+  language?: string;
+  evidenceMode?: "original" | "bilingual";
+  fusionMode?: "rrf" | "linear";
 }
 
 export interface ScoreDetail {
@@ -451,6 +502,21 @@ export interface SearchResultItem {
   valueScore?: number;
   score: number;
   scoreDetail?: ScoreDetail;
+  fusionScore?: number;
+  matchChannels?: string[];
+  titleOriginal?: string;
+  titleZh?: string;
+  originalSnippet?: string;
+  localizedSnippet?: string;
+  contentLanguage?: string;
+  displayContentSource?: string;
+  localizationId?: string;
+  translationType?: string;
+  reviewStatus?: string;
+  chunkGroupId?: string;
+  section?: string;
+  pageStart?: number;
+  pageEnd?: number;
 }
 
 export interface SearchResult {
@@ -477,7 +543,23 @@ export interface Citation {
   chunkId: string;
   title: string;
   sourceUrl?: string;
+  sourceDomain?: string;
+  sourceType?: string;
   snippet: string;
+  score?: number;
+  titleOriginal?: string;
+  titleZh?: string;
+  displaySnippet?: string;
+  originalSnippet?: string;
+  contentLanguage?: string;
+  displayContentSource?: string;
+  localizationId?: string;
+  translationType?: string;
+  reviewStatus?: string;
+  chunkGroupId?: string;
+  section?: string;
+  pageStart?: number;
+  pageEnd?: number;
 }
 
 export interface RetrievalInfo {
@@ -493,9 +575,23 @@ export interface QaAnswerResponse {
   confidence?: number;
   debugInfo?: {
     queryPlan?: string;
+    originalQuery?: string;
+    completedQuery?: string;
     contextTokens?: number;
     retrievedTitles?: string[];
     systemPrompt?: string;
+    embeddingDiagnostics?: {
+      eligibleChunkCount: number;
+      totalEmbeddingCount: number;
+      doneCount: number;
+      pendingCount: number;
+      failedCount: number;
+      staleCount: number;
+      coverage: number;
+      status: string;
+      message?: string;
+    };
+    citationValidationIssues?: string[];
   };
 }
 
@@ -1195,6 +1291,8 @@ export interface DocumentChunkItem {
   headingPath?: string;
   sectionLevel?: number;
   content: string;
+  contentOriginal?: string;
+  contentNormalized?: string;
   contentMarkdown?: string;
   contentHash?: string;
   tokenCount?: number;
@@ -1207,8 +1305,83 @@ export interface DocumentChunkItem {
   embeddingModel?: string;
   indexStatus?: string;
   metadata?: string;
+  detectedLanguage?: string;
+  languageConfidence?: number;
+  languageDistribution?: string;
+  contentType?: string;
+  processingRoute?: string;
+  localizationRequired?: boolean;
+  chunkGroupId?: string;
+  parentChunkId?: string;
+  paragraphStart?: number;
+  paragraphEnd?: number;
+  boundingBox?: string;
+  pageStart?: number;
+  pageEnd?: number;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface ChunkLocalization {
+  id: string;
+  chunkId: string;
+  languageCode: string;
+  headingLocalized?: string;
+  contentLocalized: string;
+  translationType: string;
+  model?: string;
+  promptVersion: string;
+  glossaryVersion?: string;
+  qualityScore?: number;
+  qualityIssues?: string;
+  reviewStatus: string;
+  status: string;
+  sourceContentHash: string;
+  idempotencyKey: string;
+  reviewedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChunkEnrichment {
+  id: string;
+  chunkId: string;
+  localizationId?: string;
+  languageCode: string;
+  summary?: string;
+  keywords?: string;
+  entities?: string;
+  facts?: string;
+  hypotheticalQuestions?: string;
+  model?: string;
+  promptVersion?: string;
+  sourceContentHash: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChunkBatchResult {
+  total: number;
+  succeeded: number;
+  failed: number;
+  errors: string[];
+}
+
+export interface MultilingualBatchJob {
+  id: string;
+  documentId: string;
+  jobType: "translate" | "enrich" | "multi_vector";
+  status: "pending" | "running" | "paused" | "done" | "failed";
+  totalItems: number;
+  processedItems: number;
+  succeededItems: number;
+  failedItems: number;
+  currentChunkId?: string;
+  errorMessage?: string;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ===== Chunk Embedding =====

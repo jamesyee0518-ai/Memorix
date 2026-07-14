@@ -80,6 +80,7 @@ public class ChunkWorker : BackgroundService
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<IAppDbContext>();
             var chunkingService = scope.ServiceProvider.GetRequiredService<IChunkingService>();
+            var fullTextIndex = scope.ServiceProvider.GetRequiredService<IChineseFullTextIndexService>();
 
             try
             {
@@ -134,6 +135,15 @@ public class ChunkWorker : BackgroundService
                 doc.ChunkStatus = "done";
                 doc.UpdatedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
+
+                try
+                {
+                    await fullTextIndex.IndexDocumentAsync(documentId, ct);
+                }
+                catch (Exception indexEx)
+                {
+                    _logger.LogWarning(indexEx, "Chunking succeeded but FTS5 indexing failed for document {DocumentId}", documentId);
+                }
 
                 _logger.LogInformation("ChunkWorker completed chunking for document {DocumentId}, created {Count} chunks",
                     documentId, newChunks.Count);

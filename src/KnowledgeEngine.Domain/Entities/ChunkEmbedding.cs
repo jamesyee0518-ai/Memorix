@@ -12,6 +12,10 @@ public class ChunkEmbedding
     public string? EmbeddingJson { get; set; }  // JSON序列化的float[]
     public string? VectorRef { get; set; }  // 外部向量存储引用
     public string? ChunkContentHash { get; set; }
+    public string LanguageCode { get; set; } = "und";
+    public string EmbeddingType { get; set; } = "original";
+    public Guid? LocalizationId { get; set; }
+    public string? SourceContentHash { get; set; }
     public string Status { get; set; } = "pending";  // pending/done/failed/stale
     public string? ErrorMessage { get; set; }
     public int RetryCount { get; set; }

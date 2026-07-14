@@ -123,6 +123,9 @@ using (var scope = app.Services.CreateScope())
     try
     {
         db.Database.EnsureCreated();
+        db.EnsureMultilingualSetupAsync().GetAwaiter().GetResult();
+        scope.ServiceProvider.GetRequiredService<IChineseFullTextIndexService>()
+            .EnsureCreatedAsync().GetAwaiter().GetResult();
         if (db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
         {
             // PostgreSQL deployments need provider-specific vector and compatibility setup.

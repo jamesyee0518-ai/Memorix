@@ -26,6 +26,9 @@ public class WorkspacesController : BaseController
     private readonly IAppDbContext _db;
     private readonly EmbeddingSettings _embeddingSettings;
     private readonly IConfiguration _configuration;
+    private readonly ILanguageDetectionService _languageDetection;
+    private readonly IContentClassificationService _contentClassification;
+    private readonly IChineseNormalizationService _chineseNormalization;
 
     public WorkspacesController(
         IWorkspaceService workspaceService,
@@ -34,7 +37,10 @@ public class WorkspacesController : BaseController
         RuntimeRouter runtimeRouter,
         IAppDbContext db,
         IOptions<EmbeddingSettings> embeddingSettings,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ILanguageDetectionService languageDetection,
+        IContentClassificationService contentClassification,
+        IChineseNormalizationService chineseNormalization)
     {
         _workspaceService = workspaceService;
         _configService = configService;
@@ -43,6 +49,9 @@ public class WorkspacesController : BaseController
         _db = db;
         _embeddingSettings = embeddingSettings.Value;
         _configuration = configuration;
+        _languageDetection = languageDetection;
+        _contentClassification = contentClassification;
+        _chineseNormalization = chineseNormalization;
     }
 
     [HttpGet("actions/index-state")]
@@ -101,6 +110,69 @@ public class WorkspacesController : BaseController
         }
         await _db.SaveChangesAsync(ct);
         return Ok(ApiResponse<bool>.Ok(true, GetTraceId()));
+    }
+
+    [HttpPost("actions/reindex-multilingual")]
+    public async Task<IActionResult> ReindexMultilingual(
+        [FromBody] MultilingualBackfillRequest? request,
+        CancellationToken ct)
+    {
+        var userId = _currentUser.UserId ?? Guid.Empty;
+        var batchSize = Math.Clamp(request?.BatchSize ?? 50, 1, 100);
+        var query = _db.Documents.Where(document => document.UserId == userId);
+        if (request?.OnlyPending != false)
+            query = query.Where(document => document.LanguageDetectStatus == "pending" || document.PrimaryLanguage == null);
+
+        var documents = await query.OrderBy(document => document.CreatedAt).Take(batchSize).ToListAsync(ct);
+        var documentIds = documents.Select(document => document.Id).ToList();
+        var chunks = await _db.DocumentChunks.Where(chunk => documentIds.Contains(chunk.DocumentId)).ToListAsync(ct);
+        var now = DateTime.UtcNow;
+
+        foreach (var document in documents)
+        {
+            var text = document.ContentText ?? document.ContentMarkdown ?? string.Empty;
+            var detection = _languageDetection.Detect(text);
+            document.TitleOriginal ??= document.Title;
+            document.PrimaryLanguage = detection.PrimaryLanguage;
+            document.Language = detection.PrimaryLanguage;
+            document.LanguageDistribution = detection.DistributionJson;
+            document.IsMultilingual = detection.IsMultilingual;
+            document.LanguageDetectStatus = detection.PrimaryLanguage == "und" ? "review" : "done";
+            document.LocalizationStrategy = detection.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? "none" : "metadata_only";
+            document.LocalizationStatus = detection.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? "not_required" : "pending";
+            if (detection.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)) document.TitleZh ??= document.Title;
+            document.ContentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+            document.UpdatedAt = now;
+        }
+
+        foreach (var chunk in chunks)
+        {
+            chunk.ContentOriginal = string.IsNullOrEmpty(chunk.ContentOriginal) ? chunk.Content : chunk.ContentOriginal;
+            var detection = _languageDetection.Detect(chunk.ContentOriginal);
+            var classification = _contentClassification.Classify(chunk.ContentOriginal, detection);
+            chunk.DetectedLanguage = detection.PrimaryLanguage;
+            chunk.LanguageConfidence = (decimal)detection.Confidence;
+            chunk.LanguageDistribution = detection.DistributionJson;
+            chunk.ContentType = classification.ContentType;
+            chunk.ProcessingRoute = classification.ProcessingRoute;
+            chunk.LocalizationRequired = classification.LocalizationRequired;
+            chunk.ChunkGroupId ??= Guid.NewGuid();
+            chunk.ContentNormalized = detection.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                ? _chineseNormalization.Normalize(chunk.ContentOriginal)
+                : null;
+            chunk.UpdatedAt = now;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        var remaining = await _db.Documents.CountAsync(
+            document => document.UserId == userId && (document.LanguageDetectStatus == "pending" || document.PrimaryLanguage == null), ct);
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            processedDocuments = documents.Count,
+            processedChunks = chunks.Count,
+            remaining,
+            hasMore = remaining > 0
+        }, GetTraceId()));
     }
 
     /// <summary>
@@ -194,6 +266,14 @@ public class WorkspacesController : BaseController
     public async Task<IActionResult> Switch(Guid id, CancellationToken ct)
     {
         var userId = _currentUser.UserId ?? Guid.Empty;
+        var workspace = await _workspaceService.GetWorkspaceAsync(id, ct);
+        if (workspace == null || (workspace.UserId.HasValue && workspace.UserId != userId))
+        {
+            return NotFound(ApiResponse<object>.FailObject(
+                "NOT_FOUND",
+                "Workspace not found",
+                GetTraceId()));
+        }
         await _workspaceService.SetCurrentWorkspaceAsync(userId, id, ct);
         return Ok(ApiResponse<object>.Ok(new { workspaceId = id }, GetTraceId()));
     }
@@ -295,4 +375,10 @@ public class WorkspacesController : BaseController
             error = health.ErrorMessage
         }, GetTraceId()));
     }
+}
+
+public sealed class MultilingualBackfillRequest
+{
+    public int BatchSize { get; set; } = 50;
+    public bool OnlyPending { get; set; } = true;
 }

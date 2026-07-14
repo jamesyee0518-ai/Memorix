@@ -64,6 +64,10 @@ public interface IAppDbContext
     DbSet<MobileDevice> MobileDevices { get; }
     DbSet<PushNotification> PushNotifications { get; }
     DbSet<WorkspaceSetting> WorkspaceSettings { get; }
+    DbSet<Terminology> Terminology { get; }
+    DbSet<ChunkLocalization> ChunkLocalizations { get; }
+    DbSet<ChunkEnrichment> ChunkEnrichments { get; }
+    DbSet<MultilingualBatchJob> MultilingualBatchJobs { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

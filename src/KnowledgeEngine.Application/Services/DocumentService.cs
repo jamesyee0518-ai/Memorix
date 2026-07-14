@@ -35,7 +35,9 @@ public class DocumentService
         if (page < 1) page = 1;
         if (pageSize < 1 || pageSize > 100) pageSize = 20;
 
-        var query = _db.Documents.Where(d => d.UserId == userId);
+        var normalizedUserId = userId.ToString("D");
+        var query = _db.Documents.Where(d =>
+            d.UserId == userId || d.UserId.ToString().ToLower() == normalizedUserId);
 
         if (topicId.HasValue)
         {
@@ -70,8 +72,16 @@ public class DocumentService
     public async Task<ApiResponse<DocumentDetail>> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
         var userId = RequireUserId();
+        var normalizedId = id.ToString("D");
+        var normalizedUserId = userId.ToString("D");
 
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == id && d.UserId == userId, ct);
+        // Microsoft.Data.Sqlite serializes Guid parameters as upper-case text, while
+        // legacy/fetcher imports store UUIDs as lower-case text. SQLite compares text
+        // case-sensitively, so keep the indexed Guid comparison and add a normalized
+        // compatibility branch for already-imported records.
+        var document = await _db.Documents.FirstOrDefaultAsync(d =>
+            (d.Id == id || d.Id.ToString().ToLower() == normalizedId) &&
+            (d.UserId == userId || d.UserId.ToString().ToLower() == normalizedUserId), ct);
         if (document == null)
         {
             throw new NotFoundException("Document", id);

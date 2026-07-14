@@ -11,12 +11,17 @@ import {
   RefreshCw,
   Scissors,
   FileText,
+  Languages,
+  CheckCircle2,
+  Sparkles,
   Zap,
 } from "lucide-react";
 import { chunkApi, actionApi, chunkEmbeddingApi, ApiRequestError } from "@/lib/api";
 import type { DocumentChunkItem } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 // ===== 向量化状态徽章 =====
@@ -66,6 +71,16 @@ function EmbeddingStatusBadge({ status }: { status: string }) {
   );
 }
 
+function parseStringList(value?: string): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return value.split(/[，,；;\n]/).map((item) => item.trim()).filter(Boolean);
+  }
+}
+
 // ===== 单个分块行 =====
 
 function ChunkRow({
@@ -80,6 +95,12 @@ function ChunkRow({
   const isHighlighted = !!highlightChunkId && highlightChunkId === chunk.id;
   const [expanded, setExpanded] = useState(isHighlighted);
   const [reembedding, setReembedding] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [editingLocalization, setEditingLocalization] = useState(false);
+  const [localizedHeading, setLocalizedHeading] = useState("");
+  const [localizedContent, setLocalizedContent] = useState("");
   const queryClient = useQueryClient();
   const title =
     chunk.chunkTitle || chunk.headingPath || `分块 ${chunk.chunkIndex}`;
@@ -92,6 +113,72 @@ function ChunkRow({
     queryFn: () => chunkEmbeddingApi.get(chunk.id),
     enabled: expanded && isFailed,
   });
+
+  const { data: localizations, refetch: refetchLocalizations } = useQuery({
+    queryKey: ["chunk-localizations", chunk.id],
+    queryFn: () => chunkApi.getLocalizations(chunk.id),
+    enabled: expanded,
+  });
+  const localization = localizations?.[0];
+  const { data: enrichments, refetch: refetchEnrichments } = useQuery({
+    queryKey: ["chunk-enrichments", chunk.id],
+    queryFn: () => chunkApi.getEnrichments(chunk.id),
+    enabled: expanded,
+  });
+  const enrichment = enrichments?.[0];
+
+  const handleTranslate = async (force = false) => {
+    setTranslating(true);
+    try {
+      await chunkApi.translate(chunk.id, force);
+      await refetchLocalizations();
+      queryClient.invalidateQueries({ queryKey: ["document-chunks", documentId] });
+      toast.success(force ? "已重新生成中文译文" : "已生成中文译文");
+    } catch (err) {
+      toast.error(err instanceof ApiRequestError ? err.message : "翻译失败");
+    } finally {
+      setTranslating(false);
+    }
+  };
+
+  const beginReview = () => {
+    if (!localization) return;
+    setLocalizedHeading(localization.headingLocalized || "");
+    setLocalizedContent(localization.contentLocalized || "");
+    setEditingLocalization(true);
+  };
+
+  const handleReview = async () => {
+    if (!localization || !localizedContent.trim()) return;
+    setReviewing(true);
+    try {
+      await chunkApi.review(chunk.id, localization.id, {
+        headingLocalized: localizedHeading.trim() || undefined,
+        contentLocalized: localizedContent.trim(),
+        approved: true,
+      });
+      await refetchLocalizations();
+      setEditingLocalization(false);
+      toast.success("译文已审校并用于检索与引用");
+    } catch (err) {
+      toast.error(err instanceof ApiRequestError ? err.message : "审校保存失败");
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  const handleEnrich = async () => {
+    setEnriching(true);
+    try {
+      await chunkApi.enrich(chunk.id, !!enrichment);
+      await refetchEnrichments();
+      toast.success(enrichment ? "已重新生成知识增强" : "已生成知识增强");
+    } catch (err) {
+      toast.error(err instanceof ApiRequestError ? err.message : "知识增强失败");
+    } finally {
+      setEnriching(false);
+    }
+  };
 
   const handleReembed = async () => {
     setReembedding(true);
@@ -171,6 +258,8 @@ function ChunkRow({
             {chunk.embeddingModel && (
               <span>模型: {chunk.embeddingModel}</span>
             )}
+            {chunk.detectedLanguage && <span>语言: {chunk.detectedLanguage}</span>}
+            {chunk.processingRoute && <span>处理路线: {chunk.processingRoute}</span>}
             {chunk.indexStatus && <span>索引: {chunk.indexStatus}</span>}
             {chunk.contentHash && (
               <span className="font-mono">
@@ -178,9 +267,121 @@ function ChunkRow({
               </span>
             )}
           </div>
-          <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded border bg-background p-3 text-sm leading-relaxed">
-            {chunk.contentMarkdown || chunk.content}
-          </pre>
+          <div className="rounded border bg-background p-3">
+            <div className="mb-2 text-xs font-medium text-muted-foreground">原文</div>
+            <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed">
+              {chunk.contentOriginal || chunk.contentMarkdown || chunk.content}
+            </pre>
+          </div>
+
+          <div className="mt-3 rounded-lg border bg-background p-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Languages className="size-4 text-primary" />
+                <span className="text-sm font-medium">中文译文</span>
+                {localization && (
+                  <>
+                    <Badge variant="secondary">
+                      {localization.reviewStatus === "approved" ? "人工审校" : "机器翻译"}
+                    </Badge>
+                    {localization.qualityScore !== undefined && (
+                      <Badge variant="outline">质量 {Math.round(localization.qualityScore)}</Badge>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {localization && !editingLocalization && (
+                  <Button size="xs" variant="outline" onClick={beginReview}>审校</Button>
+                )}
+                <Button
+                  size="xs"
+                  variant={localization ? "ghost" : "default"}
+                  onClick={() => handleTranslate(!!localization)}
+                  disabled={translating}
+                >
+                  {translating && <Loader2 className="mr-1.5 size-3 animate-spin" />}
+                  {localization ? "重新翻译" : "翻译此段"}
+                </Button>
+              </div>
+            </div>
+
+            {editingLocalization && localization ? (
+              <div className="space-y-2">
+                <Input
+                  value={localizedHeading}
+                  onChange={(event) => setLocalizedHeading(event.target.value)}
+                  placeholder="中文标题（可选）"
+                />
+                <Textarea
+                  value={localizedContent}
+                  onChange={(event) => setLocalizedContent(event.target.value)}
+                  rows={8}
+                  placeholder="中文译文"
+                />
+                <div className="flex justify-end gap-2">
+                  <Button size="xs" variant="ghost" onClick={() => setEditingLocalization(false)}>
+                    取消
+                  </Button>
+                  <Button size="xs" onClick={handleReview} disabled={reviewing || !localizedContent.trim()}>
+                    {reviewing ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : <CheckCircle2 className="mr-1.5 size-3" />}
+                    审核通过
+                  </Button>
+                </div>
+              </div>
+            ) : localization ? (
+              <div>
+                {localization.headingLocalized && (
+                  <p className="mb-2 text-sm font-semibold">{localization.headingLocalized}</p>
+                )}
+                <p className="max-h-80 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed">
+                  {localization.contentLocalized}
+                </p>
+                {localization.qualityIssues && (
+                  <p className="mt-2 text-xs text-amber-600">质量提示：{localization.qualityIssues}</p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                尚未生成中文译文。译文会自动写入中文全文索引，并在双语问答中作为可追溯证据展示。
+              </p>
+            )}
+          </div>
+
+          <div className="mt-3 rounded-lg border bg-background p-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Sparkles className="size-4 text-primary" />
+                <span className="text-sm font-medium">中文知识增强</span>
+                {enrichment && <Badge variant="outline">{enrichment.status === "done" ? "已完成" : enrichment.status}</Badge>}
+              </div>
+              <Button size="xs" variant={enrichment ? "ghost" : "outline"} onClick={handleEnrich} disabled={enriching}>
+                {enriching && <Loader2 className="mr-1.5 size-3 animate-spin" />}
+                {enrichment ? "重新生成" : "生成增强"}
+              </Button>
+            </div>
+            {enrichment?.status === "done" ? (
+              <div className="space-y-3 text-sm">
+                {enrichment.summary && <div><p className="mb-1 text-xs font-medium text-muted-foreground">摘要</p><p>{enrichment.summary}</p></div>}
+                {parseStringList(enrichment.keywords).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {parseStringList(enrichment.keywords).map((item) => <Badge key={item} variant="secondary">{item}</Badge>)}
+                  </div>
+                )}
+                {parseStringList(enrichment.entities).length > 0 && (
+                  <div><p className="mb-1 text-xs font-medium text-muted-foreground">实体</p><p>{parseStringList(enrichment.entities).join(" · ")}</p></div>
+                )}
+                {parseStringList(enrichment.facts).length > 0 && (
+                  <div><p className="mb-1 text-xs font-medium text-muted-foreground">事实</p><ul className="list-disc space-y-1 pl-5">{parseStringList(enrichment.facts).map((item) => <li key={item}>{item}</li>)}</ul></div>
+                )}
+                {parseStringList(enrichment.hypotheticalQuestions).length > 0 && (
+                  <div><p className="mb-1 text-xs font-medium text-muted-foreground">可回答问题</p><ul className="list-disc space-y-1 pl-5">{parseStringList(enrichment.hypotheticalQuestions).map((item) => <li key={item}>{item}</li>)}</ul></div>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">提炼摘要、关键词、实体、事实和可回答问题，并写入中文检索索引。</p>
+            )}
+          </div>
 
           {/* 向量化失败详情 */}
           {isFailed && (
@@ -233,6 +434,7 @@ export function ChunkDebugger({
 }) {
   const queryClient = useQueryClient();
   const [rechunking, setRechunking] = useState(false);
+  const [batchAction, setBatchAction] = useState<"translate" | "enrich" | "multi_vector" | null>(null);
 
   const { data: chunks, isLoading, error } = useQuery({
     queryKey: ["document-chunks", documentId],
@@ -248,6 +450,15 @@ export function ChunkDebugger({
         : false;
     },
   });
+  const { data: batchJobs } = useQuery({
+    queryKey: ["document-batch-jobs", documentId],
+    queryFn: () => chunkApi.getDocumentJobs(documentId),
+    enabled: !!documentId,
+    refetchInterval: (query) => (query.state.data ?? []).some((job) =>
+      job.status === "pending" || job.status === "running") ? 2000 : false,
+  });
+  const activeJob = batchJobs?.find((job) => ["pending", "running", "paused"].includes(job.status));
+  const visibleJob = activeJob ?? batchJobs?.find((job) => job.failedItems > 0);
 
   const handleRechunk = async () => {
     setRechunking(true);
@@ -267,6 +478,34 @@ export function ChunkDebugger({
 
   const handleRetry = () => {
     queryClient.invalidateQueries({ queryKey: ["document-chunks", documentId] });
+  };
+
+  const handleBatch = async (action: "translate" | "enrich" | "multi_vector") => {
+    setBatchAction(action);
+    try {
+      const result = action === "translate" ? await chunkApi.translateDocument(documentId)
+        : action === "enrich" ? await chunkApi.enrichDocument(documentId)
+        : await chunkApi.rebuildMultiVectors(documentId);
+      toast.success(`${action === "translate" ? "全文翻译" : action === "enrich" ? "全文增强" : "多路向量重建"}任务已进入后台队列`);
+      queryClient.setQueryData(["document-batch-jobs", documentId], (current: typeof batchJobs) =>
+        [result, ...(current ?? []).filter((item) => item.id !== result.id)]);
+      queryClient.invalidateQueries({ queryKey: ["document-chunks", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["chunk-localizations"] });
+      queryClient.invalidateQueries({ queryKey: ["chunk-enrichments"] });
+    } catch (err) {
+      toast.error(err instanceof ApiRequestError ? err.message : "批量处理失败");
+    } finally {
+      setBatchAction(null);
+    }
+  };
+
+  const controlBatchJob = async (action: "pause" | "resume" | "retry") => {
+    if (!visibleJob) return;
+    try {
+      await chunkApi.controlJob(visibleJob.id, action);
+      queryClient.invalidateQueries({ queryKey: ["document-batch-jobs", documentId] });
+      toast.success(action === "pause" ? "任务将在当前分块完成后暂停" : action === "resume" ? "任务已继续" : "任务已重新排队");
+    } catch (err) { toast.error(err instanceof ApiRequestError ? err.message : "任务操作失败"); }
   };
 
   // 加载中
@@ -334,20 +573,62 @@ export function ChunkDebugger({
         <p className="text-sm text-muted-foreground">
           共 {chunks.length} 个分块 · 已向量化 {doneCount} 个
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRechunk}
-          disabled={rechunking}
-        >
-          {rechunking ? (
-            <Loader2 className="mr-1.5 size-3.5 animate-spin" />
-          ) : (
-            <Scissors className="mr-1.5 size-3.5" />
-          )}
-          重新分块
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => handleBatch("translate")} disabled={batchAction !== null}>
+            {batchAction === "translate" ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Languages className="mr-1.5 size-3.5" />}
+            全文翻译
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => handleBatch("enrich")} disabled={batchAction !== null}>
+            {batchAction === "enrich" ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Sparkles className="mr-1.5 size-3.5" />}
+            全文增强
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => handleBatch("multi_vector")} disabled={batchAction !== null}>
+            {batchAction === "multi_vector" ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 size-3.5" />}
+            重建多路向量
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRechunk}
+            disabled={rechunking}
+          >
+            {rechunking ? (
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+            ) : (
+              <Scissors className="mr-1.5 size-3.5" />
+            )}
+            重新分块
+          </Button>
+        </div>
       </div>
+
+      {visibleJob && (
+        <div className="rounded-lg border bg-muted/30 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {visibleJob.status === "running" && <Loader2 className="size-4 animate-spin" />}
+                {visibleJob.jobType === "translate" ? "全文翻译" : visibleJob.jobType === "enrich" ? "全文增强" : "多路向量重建"}
+                <Badge variant="outline">{visibleJob.status === "paused" ? "已暂停" : visibleJob.status === "pending" ? "等待中" : visibleJob.status === "done" ? "已完成" : "处理中"}</Badge>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full bg-primary transition-all" style={{ width: `${visibleJob.totalItems ? Math.round(visibleJob.processedItems / visibleJob.totalItems * 100) : 0}%` }} />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {visibleJob.processedItems}/{visibleJob.totalItems} · 成功 {visibleJob.succeededItems} · 失败 {visibleJob.failedItems}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {visibleJob.status === "paused" ? (
+                <Button size="xs" variant="outline" onClick={() => controlBatchJob("resume")}>继续</Button>
+              ) : (
+                visibleJob.status === "running" || visibleJob.status === "pending" ? <Button size="xs" variant="outline" onClick={() => controlBatchJob("pause")}>暂停</Button> : null
+              )}
+              {visibleJob.failedItems > 0 && visibleJob.status !== "running" && <Button size="xs" variant="ghost" onClick={() => controlBatchJob("retry")}>重试</Button>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 表头 */}
       <div className="flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">

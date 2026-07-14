@@ -1,11 +1,14 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { toast } from "sonner";
 import {
   Loader2,
   MessageCircle,
   Plus,
   History,
+  Trash2,
 } from "lucide-react";
 import { qaApi } from "@/lib/api";
 import type { QaSession } from "@/lib/types";
@@ -39,23 +42,29 @@ function ConversationItem({
   session,
   isSelected,
   onSelect,
+  onDelete,
+  deleting,
 }: {
   session: QaSession;
   isSelected: boolean;
   onSelect: (sessionId: string) => void;
+  onDelete: (sessionId: string) => void;
+  deleting: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(session.id)}
+    <div
       className={cn(
-        "w-full rounded-lg border px-3 py-2.5 text-left transition-colors",
+        "group relative rounded-lg border transition-colors",
         isSelected
           ? "border-primary bg-primary/5"
           : "border-transparent hover:border-border hover:bg-muted/50"
       )}
     >
-      <div className="flex items-start gap-2">
+      <button
+        type="button"
+        onClick={() => onSelect(session.id)}
+        className="flex w-full items-start gap-2 rounded-lg px-3 py-2.5 pr-10 text-left"
+      >
         <MessageCircle
           className={cn(
             "mt-0.5 size-4 shrink-0",
@@ -76,8 +85,25 @@ function ConversationItem({
             {formatRelativeTime(session.updatedAt || session.createdAt)}
           </p>
         </div>
-      </div>
-    </button>
+      </button>
+      <button
+        type="button"
+        aria-label={`删除对话：${session.title || "未命名对话"}`}
+        title="删除对话"
+        disabled={deleting}
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete(session.id);
+        }}
+        className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 disabled:pointer-events-none group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {deleting ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Trash2 className="size-3.5" />
+        )}
+      </button>
+    </div>
   );
 }
 
@@ -88,6 +114,7 @@ interface ConversationListProps {
   selectedSessionId?: string;
   onSelectSession: (sessionId: string) => void;
   onNewChat: () => void;
+  onSessionDeleted: (deletedSessionId: string, nextSessionId?: string) => void;
 }
 
 export function ConversationList({
@@ -95,7 +122,10 @@ export function ConversationList({
   selectedSessionId,
   onSelectSession,
   onNewChat,
+  onSessionDeleted,
 }: ConversationListProps) {
+  const queryClient = useQueryClient();
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["qa-sessions", topicId],
     queryFn: () => qaApi.getSessions(topicId),
@@ -103,6 +133,22 @@ export function ConversationList({
   });
 
   const sessions = data?.items ?? [];
+
+  const handleDelete = async (sessionId: string) => {
+    if (!window.confirm("确定删除这条对话吗？对话消息也会一并删除。")) return;
+    setDeletingId(sessionId);
+    try {
+      await qaApi.deleteSession(sessionId);
+      const nextSessionId = sessions.find((item) => item.id !== sessionId)?.id;
+      await queryClient.invalidateQueries({ queryKey: ["qa-sessions"] });
+      onSessionDeleted(sessionId, nextSessionId);
+      toast.success("对话已删除");
+    } catch {
+      toast.error("删除对话失败，请重试");
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -143,6 +189,8 @@ export function ConversationList({
               session={session}
               isSelected={session.id === selectedSessionId}
               onSelect={onSelectSession}
+              onDelete={handleDelete}
+              deleting={deletingId === session.id}
             />
           ))
         )}

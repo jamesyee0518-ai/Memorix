@@ -412,6 +412,46 @@ public class ReportService : IReportService
         }
     }
 
+    // ===== Delete Report =====
+
+    public async Task<ApiResponse<object>> DeleteAsync(
+        Guid userId,
+        Guid reportId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var report = await _db.Reports
+                .FirstOrDefaultAsync(r => r.Id == reportId && r.UserId == userId, ct);
+
+            if (report == null)
+            {
+                return ApiResponse<object>.Fail("report_not_found", "Report not found");
+            }
+
+            var sources = await _db.ReportSources.Where(x => x.ReportId == reportId).ToListAsync(ct);
+            var citations = await _db.ReportCitations.Where(x => x.ReportId == reportId).ToListAsync(ct);
+            var jobs = await _db.ReportJobs.Where(x => x.ReportId == reportId && x.UserId == userId).ToListAsync(ct);
+            var exportJobs = await _db.ExportJobs
+                .Where(x => x.TargetType == "report" && x.TargetId == reportId && x.UserId == userId)
+                .ToListAsync(ct);
+
+            _db.ReportSources.RemoveRange(sources);
+            _db.ReportCitations.RemoveRange(citations);
+            _db.ReportJobs.RemoveRange(jobs);
+            _db.ExportJobs.RemoveRange(exportJobs);
+            _db.Reports.Remove(report);
+            await _db.SaveChangesAsync(ct);
+
+            return ApiResponse<object>.Ok(new { deleted = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete report {ReportId}", reportId);
+            return ApiResponse<object>.Fail("delete_report_error", ex.Message);
+        }
+    }
+
     // ===== Get Job Status =====
 
     public async Task<ApiResponse<ReportJobStatusResponse>> GetJobStatusAsync(

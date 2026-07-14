@@ -209,12 +209,24 @@ function SearchResultCard({ item, query }: { item: SearchResultItem; query: stri
               </span>
             </span>
           )}
+          {item.contentLanguage && <Badge variant="secondary">{item.contentLanguage}</Badge>}
+          {item.matchChannels?.map((channel) => (
+            <Badge key={channel} variant="outline">
+              {channel === "fts_zh" ? "中文全文" : channel === "vector" ? "跨语言向量" : "关键词"}
+            </Badge>
+          ))}
         </div>
 
         {/* 命中片段 */}
         <p className="line-clamp-3 text-sm leading-relaxed text-muted-foreground">
           <HighlightText text={item.snippet || ""} query={query} />
         </p>
+        {item.localizedSnippet && item.originalSnippet && item.localizedSnippet !== item.originalSnippet && (
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer select-none">查看外文原文证据</summary>
+            <p className="mt-2 line-clamp-4 leading-relaxed">{item.originalSnippet}</p>
+          </details>
+        )}
 
         {/* 底部操作 */}
         <div className="flex items-center justify-between border-t pt-2">
@@ -332,6 +344,8 @@ export default function SearchPage() {
         topicId: topicId !== "all" ? topicId : undefined,
         filters: Object.keys(filters).length > 0 ? filters : undefined,
         limit: 20,
+        fusionMode: "rrf",
+        evidenceMode: "bilingual",
       });
       setResult(data);
     } catch (err) {
@@ -443,7 +457,9 @@ export default function SearchPage() {
               <span className="text-xs font-medium text-muted-foreground">检索方式</span>
               <Select value={searchType} onValueChange={(v) => setSearchType(v as string)}>
                 <SelectTrigger size="sm" className="w-28">
-                  <SelectValue />
+                  <SelectValue>
+                    {SEARCH_TYPES.find((item) => item.value === searchType)?.label ?? "混合检索"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {SEARCH_TYPES.map((t) => (
@@ -488,7 +504,11 @@ export default function SearchPage() {
                   <Label className="text-xs">专题筛选</Label>
                   <Select value={topicId} onValueChange={(v) => setTopicId(v as string)}>
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="全部专题" />
+                      <SelectValue placeholder="全部专题">
+                        {topicId === "all"
+                          ? "全部专题"
+                          : topics.find((topic) => topic.id === topicId)?.name ?? "未知专题"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">全部专题</SelectItem>

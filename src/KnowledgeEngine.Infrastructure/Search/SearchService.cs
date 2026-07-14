@@ -18,15 +18,24 @@ public class SearchService : ISearchService
 
     private readonly AppDbContext _db;
     private readonly IEmbeddingService _embeddingService;
+    private readonly IChineseFullTextIndexService _fullTextIndex;
+    private readonly IRetrievalFusionService _fusion;
+    private readonly IChineseTokenizer _tokenizer;
     private readonly ILogger<SearchService> _logger;
 
     public SearchService(
         AppDbContext db,
         IEmbeddingService embeddingService,
+        IChineseFullTextIndexService fullTextIndex,
+        IRetrievalFusionService fusion,
+        IChineseTokenizer tokenizer,
         ILogger<SearchService> logger)
     {
         _db = db;
         _embeddingService = embeddingService;
+        _fullTextIndex = fullTextIndex;
+        _fusion = fusion;
+        _tokenizer = tokenizer;
         _logger = logger;
     }
 
@@ -79,7 +88,8 @@ public class SearchService : ISearchService
                     SearchMode = searchType,
                     LatencyMs = sw.ElapsedMilliseconds,
                     KeywordMatchCount = searchType == "keyword" || searchType == "hybrid" ? items.Count : 0,
-                    VectorMatchCount = searchType == "vector" || searchType == "hybrid" ? items.Count : 0
+                    VectorMatchCount = searchType == "vector" || searchType == "hybrid" ? items.Count : 0,
+                    FusionMode = searchType == "hybrid" ? request.FusionMode : null
                 }
             };
 
@@ -94,13 +104,46 @@ public class SearchService : ISearchService
 
     // ===== Keyword Search =====
 
+    private static string NormalizeKeywordQuery(string rawQuery)
+    {
+        var normalized = rawQuery.Trim().ToLowerInvariant();
+        var technicalTerms = System.Text.RegularExpressions.Regex.Matches(
+                normalized,
+                @"[a-z0-9][a-z0-9._+-]*",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            .Select(match => match.Value.Trim('.', '-', '_', '+'))
+            .Where(term => term.Length >= 2)
+            .OrderByDescending(term => term.Any(char.IsDigit))
+            .ThenByDescending(term => term.Length)
+            .ToList();
+
+        if (technicalTerms.Count > 0)
+        {
+            return technicalTerms[0];
+        }
+
+        var questionWords = new[]
+        {
+            "请问", "麻烦", "告诉我", "什么时候", "是什么", "怎么样", "为什么",
+            "如何", "哪些", "多少", "是否", "能否", "可以", "相关", "资料", "发布"
+        };
+        foreach (var word in questionWords)
+        {
+            normalized = normalized.Replace(word, string.Empty, StringComparison.Ordinal);
+        }
+
+        normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"[^\p{L}\p{N}]+", string.Empty);
+        return normalized.Length >= 2 ? normalized : rawQuery.Trim().ToLowerInvariant();
+    }
+
     private async Task<List<SearchResultItem>> KeywordSearchAsync(
         Guid userId,
         SearchRequest request,
         int limit,
         CancellationToken ct)
     {
-        var query = request.Query.Trim().ToLowerInvariant();
+        var query = NormalizeKeywordQuery(request.Query);
+        var terms = BuildKeywordTerms(query);
         var filters = request.Filters;
 
         // Pre-compute tag/entity filter doc id sets once (async) to apply to both queries
@@ -128,7 +171,7 @@ public class SearchService : ISearchService
                          join d in _db.Documents on c.DocumentId equals d.Id
                          join s in _db.Sources on d.SourceId equals s.Id
                          where c.UserId == userId
-                             && c.Content.ToLower().Contains(query)
+                             && terms.Any(term => c.Content.ToLower().Contains(term))
                          select new { c, d, s };
 
         // Apply filters inline
@@ -192,8 +235,9 @@ public class SearchService : ISearchService
         var docQuery = from d in _db.Documents
                        join s in _db.Sources on d.SourceId equals s.Id
                        where d.UserId == userId
-                           && (d.Title.ToLower().Contains(query) ||
-                               (d.ContentText != null && d.ContentText.ToLower().Contains(query)))
+                           && (terms.Any(term => d.Title.ToLower().Contains(term)) ||
+                               (d.ContentText != null && terms.Any(term => d.ContentText.ToLower().Contains(term))) ||
+                               (d.Summary != null && terms.Any(term => d.Summary.ToLower().Contains(term))))
                        select new { d, s };
 
         // Apply filters inline
@@ -255,6 +299,21 @@ public class SearchService : ISearchService
             .Take(limit)
             .ToListAsync(ct);
 
+        foreach (var item in chunkResults)
+        {
+            var score = CalculateTokenMatchScore(terms, $"{item.Title} {item.Snippet}");
+            item.Score = score;
+            item.ScoreDetail!.KeywordScore = score;
+            item.MatchChannels = new List<string> { "keyword" };
+        }
+        foreach (var item in docResults)
+        {
+            var score = CalculateTokenMatchScore(terms, $"{item.Title} {item.Snippet}");
+            item.Score = score;
+            item.ScoreDetail!.KeywordScore = score;
+            item.MatchChannels = new List<string> { "keyword" };
+        }
+
         // Merge and deduplicate (by document_id + chunk_id)
         var merged = new List<SearchResultItem>();
         var seen = new HashSet<string>();
@@ -271,6 +330,27 @@ public class SearchService : ISearchService
         return merged.Take(limit).ToList();
     }
 
+    private List<string> BuildKeywordTerms(string query)
+    {
+        var tokenized = _tokenizer.Tokenize(query);
+        var terms = tokenized.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(term => term.Length >= 2)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(term => term.Length)
+            .Take(16)
+            .ToList();
+        if (terms.Count == 0 && !string.IsNullOrWhiteSpace(query)) terms.Add(query);
+        return terms;
+    }
+
+    private static double CalculateTokenMatchScore(IReadOnlyCollection<string> terms, string text)
+    {
+        if (terms.Count == 0 || string.IsNullOrWhiteSpace(text)) return 0;
+        var normalized = text.ToLowerInvariant();
+        var matched = terms.Count(term => normalized.Contains(term, StringComparison.Ordinal));
+        return Math.Clamp(Math.Max(1d / terms.Count, (double)matched / terms.Count), 0, 1);
+    }
+
     // ===== Vector Search =====
 
     private async Task<List<SearchResultItem>> VectorSearchAsync(
@@ -281,6 +361,13 @@ public class SearchService : ISearchService
     {
         // Generate query embedding
         var queryEmbedding = await _embeddingService.EmbedAsync(request.Query, ct);
+
+        var hasMultiVectorRows = await _db.ChunkEmbeddings.AsNoTracking()
+            .AnyAsync(x => x.Status == "done" && x.EmbeddingType != "original", ct);
+        if (_db.Database.IsSqlite() || hasMultiVectorRows)
+        {
+            return await VectorSearchSqliteAsync(userId, request, queryEmbedding, limit, ct);
+        }
 
         // Build vector string for raw SQL
         var vectorStr = "[" + string.Join(",",
@@ -362,6 +449,128 @@ public class SearchService : ISearchService
                 await connection.CloseAsync();
             }
         }
+    }
+
+    private async Task<List<SearchResultItem>> VectorSearchSqliteAsync(
+        Guid userId,
+        SearchRequest request,
+        float[] queryEmbedding,
+        int limit,
+        CancellationToken ct)
+    {
+        var candidateQuery =
+            from embedding in _db.ChunkEmbeddings
+            join chunk in _db.DocumentChunks on embedding.ChunkId equals chunk.Id
+            join document in _db.Documents on chunk.DocumentId equals document.Id
+            join source in _db.Sources on document.SourceId equals source.Id
+            where chunk.UserId == userId
+                && embedding.Status == "done"
+                && embedding.EmbeddingJson != null
+                && (!request.TopicId.HasValue || document.TopicId == request.TopicId)
+            select new { embedding, chunk, document, source };
+
+        var filters = request.Filters;
+        if (filters != null)
+        {
+            if (!string.IsNullOrEmpty(filters.SourceType))
+                candidateQuery = candidateQuery.Where(x => x.source.SourceType == filters.SourceType);
+            if (!string.IsNullOrEmpty(filters.Domain))
+                candidateQuery = candidateQuery.Where(x => x.source.Domain == filters.Domain);
+            if (filters.DateFrom.HasValue)
+                candidateQuery = candidateQuery.Where(x => x.source.PublishedAt >= filters.DateFrom || x.document.CreatedAt >= filters.DateFrom);
+            if (filters.DateTo.HasValue)
+                candidateQuery = candidateQuery.Where(x => x.source.PublishedAt <= filters.DateTo || x.document.CreatedAt <= filters.DateTo);
+            if (filters.MinValueScore.HasValue)
+                candidateQuery = candidateQuery.Where(x => x.document.ValueScore >= filters.MinValueScore);
+            if (filters.TagIds is { Count: > 0 })
+            {
+                var documentIds = await _db.DocumentTags
+                    .Where(item => filters.TagIds.Contains(item.TagId))
+                    .Select(item => item.DocumentId)
+                    .Distinct()
+                    .ToListAsync(ct);
+                candidateQuery = candidateQuery.Where(x => documentIds.Contains(x.document.Id));
+            }
+            if (filters.EntityIds is { Count: > 0 })
+            {
+                var documentIds = await _db.DocumentEntities
+                    .Where(item => filters.EntityIds.Contains(item.EntityId))
+                    .Select(item => item.DocumentId)
+                    .Distinct()
+                    .ToListAsync(ct);
+                candidateQuery = candidateQuery.Where(x => documentIds.Contains(x.document.Id));
+            }
+        }
+
+        var candidates = await candidateQuery.ToListAsync(ct);
+        var results = new List<SearchResultItem>();
+
+        foreach (var candidate in candidates)
+        {
+            float[]? embedding;
+            try
+            {
+                embedding = JsonSerializer.Deserialize<float[]>(candidate.embedding.EmbeddingJson!);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (embedding == null || embedding.Length != queryEmbedding.Length) continue;
+            var similarity = CosineSimilarity(queryEmbedding, embedding);
+            if (similarity < MinVectorSimilarity) continue;
+
+            var snippet = candidate.chunk.Content.Length > 300
+                ? candidate.chunk.Content[..300] + "..."
+                : candidate.chunk.Content;
+            var freshnessScore = CalculateFreshnessScore(candidate.source.PublishedAt ?? candidate.document.CreatedAt);
+
+            results.Add(new SearchResultItem
+            {
+                DocumentId = candidate.document.Id,
+                ChunkId = candidate.chunk.Id,
+                Title = candidate.document.Title,
+                Snippet = snippet,
+                SourceType = candidate.source.SourceType,
+                SourceUrl = candidate.source.Url,
+                SourceDomain = candidate.source.Domain,
+                PublishedAt = candidate.source.PublishedAt,
+                ValueScore = candidate.document.ValueScore,
+                Score = similarity,
+                MatchChannels = new List<string> { $"vector_{candidate.embedding.EmbeddingType}" },
+                ScoreDetail = new ScoreDetail
+                {
+                    KeywordScore = 0,
+                    VectorScore = similarity,
+                    FreshnessScore = freshnessScore,
+                    ValueScore = candidate.document.ValueScore.HasValue
+                        ? candidate.document.ValueScore.Value / 100.0
+                        : 0
+                }
+            });
+        }
+
+        return results
+            .OrderByDescending(item => item.Score)
+            .Take(limit)
+            .ToList();
+    }
+
+    private static double CosineSimilarity(float[] left, float[] right)
+    {
+        double dot = 0;
+        double leftNorm = 0;
+        double rightNorm = 0;
+        for (var index = 0; index < left.Length; index++)
+        {
+            dot += left[index] * right[index];
+            leftNorm += left[index] * left[index];
+            rightNorm += right[index] * right[index];
+        }
+
+        if (leftNorm == 0 || rightNorm == 0) return 0;
+        return dot / (Math.Sqrt(leftNorm) * Math.Sqrt(rightNorm));
     }
 
     private static string BuildVectorSearchSql(Guid? topicId, SearchFilters? filters)
@@ -506,7 +715,47 @@ public class SearchService : ISearchService
     {
         // Execute keyword and vector search sequentially (DbContext is not thread-safe)
         var keywordResults = await KeywordSearchAsync(userId, request, MaxResults, ct);
-        var vectorResults = await VectorSearchAsync(userId, request, MaxResults, ct);
+        List<SearchResultItem> vectorResults;
+        try
+        {
+            vectorResults = await VectorSearchAsync(userId, request, MaxResults, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Vector search unavailable; continuing with keyword results");
+            vectorResults = new List<SearchResultItem>();
+        }
+
+        List<SearchResultItem> fullTextResults;
+        try
+        {
+            fullTextResults = await FullTextSearchAsync(userId, request, MaxResults, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Chinese FTS5 unavailable; continuing with other retrieval channels");
+            fullTextResults = new List<SearchResultItem>();
+        }
+
+        // Resolve bilingual metadata and ChunkGroupId before fusion so translated/original
+        // representations of the same evidence compete as one logical candidate.
+        await EnrichMultilingualMetadataAsync(keywordResults.Concat(vectorResults).Concat(fullTextResults).ToList(), ct);
+
+        if (!string.Equals(request.FusionMode, "linear", StringComparison.OrdinalIgnoreCase))
+        {
+            var channels = new Dictionary<string, IReadOnlyList<SearchResultItem>>
+            {
+                ["keyword"] = keywordResults,
+                ["fts_zh"] = fullTextResults
+            };
+            foreach (var group in vectorResults.GroupBy(item =>
+                         item.MatchChannels?.FirstOrDefault(x => x.StartsWith("vector_", StringComparison.Ordinal))
+                         ?? "vector_original"))
+                channels[group.Key] = group.OrderByDescending(x => x.Score).ToList();
+            var fused = _fusion.Fuse(channels, limit);
+            await EnrichMultilingualMetadataAsync(fused, ct);
+            return fused;
+        }
 
         // Merge and deduplicate (by document_id + chunk_id)
         var merged = new Dictionary<string, SearchResultItem>();
@@ -578,10 +827,88 @@ public class SearchService : ISearchService
         }
 
         // Sort by final score descending
-        return merged.Values
+        var linearResults = merged.Values
             .OrderByDescending(x => x.Score)
             .Take(limit)
             .ToList();
+        await EnrichMultilingualMetadataAsync(linearResults, ct);
+        return linearResults;
+    }
+
+    private async Task<List<SearchResultItem>> FullTextSearchAsync(Guid userId, SearchRequest request, int limit, CancellationToken ct)
+    {
+        var hits = await _fullTextIndex.SearchAsync(userId, request.Query, limit * 2, ct);
+        if (hits.Count == 0) return new List<SearchResultItem>();
+        var docIds = hits.Select(h => h.DocumentId).Distinct().ToList();
+        var docs = await _db.Documents.AsNoTracking().Where(d => docIds.Contains(d.Id)).ToDictionaryAsync(d => d.Id, ct);
+        var chunkIds = hits.Where(h => h.ChunkId != Guid.Empty).Select(h => h.ChunkId).Distinct().ToList();
+        var chunks = await _db.DocumentChunks.AsNoTracking().Where(c => chunkIds.Contains(c.Id)).ToDictionaryAsync(c => c.Id, ct);
+        var sourceIds = docs.Values.Select(d => d.SourceId).Distinct().ToList();
+        var sources = await _db.Sources.AsNoTracking().Where(s => sourceIds.Contains(s.Id)).ToDictionaryAsync(s => s.Id, ct);
+        var results = new List<SearchResultItem>();
+        foreach (var hit in hits)
+        {
+            if (!docs.TryGetValue(hit.DocumentId, out var doc)) continue;
+            if (request.TopicId.HasValue && doc.TopicId != request.TopicId) continue;
+            sources.TryGetValue(doc.SourceId, out var source);
+            chunks.TryGetValue(hit.ChunkId, out var chunk);
+            var original = chunk?.ContentOriginal ?? chunk?.Content ?? doc.Summary ?? doc.ContentText ?? doc.Title;
+            results.Add(new SearchResultItem
+            {
+                DocumentId = doc.Id, ChunkId = chunk?.Id ?? Guid.Empty,
+                Title = doc.TitleZh ?? doc.Title, Snippet = TruncateSnippet(doc.SummaryZh ?? original),
+                SourceType = source?.SourceType ?? doc.SourceType, SourceUrl = source?.Url ?? doc.SourceUrl,
+                SourceDomain = source?.Domain ?? doc.SourceDomain, PublishedAt = source?.PublishedAt ?? doc.PublishedAt,
+                ValueScore = doc.ValueScore, Score = hit.Rank,
+                ScoreDetail = new ScoreDetail { KeywordScore = hit.Rank, ValueScore = (doc.ValueScore ?? 0) / 100d }
+            });
+            if (results.Count >= limit) break;
+        }
+        return results;
+    }
+
+    private async Task EnrichMultilingualMetadataAsync(List<SearchResultItem> items, CancellationToken ct)
+    {
+        if (items.Count == 0) return;
+        var docIds = items.Select(i => i.DocumentId).Distinct().ToList();
+        var docs = await _db.Documents.AsNoTracking().Where(d => docIds.Contains(d.Id)).ToDictionaryAsync(d => d.Id, ct);
+        var chunkIds = items.Where(i => i.ChunkId != Guid.Empty).Select(i => i.ChunkId).Distinct().ToList();
+        var chunks = await _db.DocumentChunks.AsNoTracking().Where(c => chunkIds.Contains(c.Id)).ToDictionaryAsync(c => c.Id, ct);
+        var localizations = await _db.ChunkLocalizations.AsNoTracking()
+            .Where(x => chunkIds.Contains(x.ChunkId) && (x.Status == "done" || x.Status == "review_required"))
+            .ToDictionaryAsync(x => x.ChunkId, ct);
+        foreach (var item in items)
+        {
+            if (!docs.TryGetValue(item.DocumentId, out var doc)) continue;
+            chunks.TryGetValue(item.ChunkId, out var chunk);
+            localizations.TryGetValue(item.ChunkId, out var localization);
+            var original = chunk?.ContentOriginal ?? chunk?.Content ?? item.Snippet;
+            item.TitleOriginal = doc.TitleOriginal ?? doc.Title;
+            item.TitleZh = doc.TitleZh;
+            item.Title = doc.TitleZh ?? doc.Title;
+            item.OriginalSnippet = TruncateSnippet(original);
+            item.LocalizedSnippet = !string.IsNullOrWhiteSpace(localization?.ContentLocalized)
+                ? TruncateSnippet(localization.ContentLocalized)
+                : string.IsNullOrWhiteSpace(doc.SummaryZh) ? null : TruncateSnippet(doc.SummaryZh);
+            item.Snippet = item.LocalizedSnippet ?? item.OriginalSnippet;
+            item.ContentLanguage = chunk?.DetectedLanguage ?? doc.PrimaryLanguage ?? doc.Language;
+            item.DisplayContentSource = localization == null
+                ? item.LocalizedSnippet == null ? "original" : "summary"
+                : localization.ReviewStatus == "approved" ? "human_reviewed" : "machine_translated";
+            item.ChunkGroupId = chunk?.ChunkGroupId;
+            item.Section = chunk?.HeadingPath ?? chunk?.ChunkTitle;
+            item.PageStart = chunk?.PageStart;
+            item.PageEnd = chunk?.PageEnd;
+            item.LocalizationId = localization?.Id;
+            item.TranslationType = localization?.TranslationType;
+            item.ReviewStatus = localization?.ReviewStatus;
+        }
+    }
+
+    private static string TruncateSnippet(string? value)
+    {
+        value ??= string.Empty;
+        return value.Length > 300 ? value[..300] + "..." : value;
     }
 
     private static double CalculateHybridScore(ScoreDetail detail)

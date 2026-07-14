@@ -64,6 +64,19 @@ public class Citation
     public string? SourceType { get; set; }
     public string Snippet { get; set; } = string.Empty;
     public double Score { get; set; }
+    public string? TitleOriginal { get; set; }
+    public string? TitleZh { get; set; }
+    public string? DisplaySnippet { get; set; }
+    public string? OriginalSnippet { get; set; }
+    public string? ContentLanguage { get; set; }
+    public string DisplayContentSource { get; set; } = "original";
+    public Guid? ChunkGroupId { get; set; }
+    public string? Section { get; set; }
+    public int? PageStart { get; set; }
+    public int? PageEnd { get; set; }
+    public Guid? LocalizationId { get; set; }
+    public string? TranslationType { get; set; }
+    public string? ReviewStatus { get; set; }
 }
 
 public class RetrievalInfo
@@ -94,7 +107,24 @@ public class QaMessageResponse
 public class QaDebugInfo
 {
     public string? QueryPlan { get; set; }
+    public string? OriginalQuery { get; set; }
+    public string? CompletedQuery { get; set; }
     public int? ContextTokens { get; set; }
     public List<string>? RetrievedTitles { get; set; }
     public string? SystemPrompt { get; set; }
+    public EmbeddingDiagnostics? EmbeddingDiagnostics { get; set; }
+    public List<string>? CitationValidationIssues { get; set; }
+}
+
+public class EmbeddingDiagnostics
+{
+    public int EligibleChunkCount { get; set; }
+    public int TotalEmbeddingCount { get; set; }
+    public int DoneCount { get; set; }
+    public int PendingCount { get; set; }
+    public int FailedCount { get; set; }
+    public int StaleCount { get; set; }
+    public double Coverage { get; set; }
+    public string Status { get; set; } = "unknown";
+    public string? Message { get; set; }
 }

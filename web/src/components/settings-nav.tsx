@@ -19,6 +19,7 @@ import {
   Users,
   MessagesSquare,
   Rocket,
+  Languages,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,7 @@ const settingsNavItems = [
   { href: "/settings", label: "账户信息", icon: User, exact: true },
   { href: "/settings/workspace", label: "工作区", icon: Layers },
   { href: "/settings/model-config", label: "模型配置", icon: Cpu },
+  { href: "/settings/terminology", label: "术语库", icon: Languages },
   { href: "/settings/runtime", label: "运行时状态", icon: Activity },
   { href: "/settings/api-keys", label: "API Key 管理", icon: KeyRound },
   { href: "/settings/agents", label: "Agent 接入", icon: Bot },

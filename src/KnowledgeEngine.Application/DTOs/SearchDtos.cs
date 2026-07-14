@@ -14,6 +14,9 @@ public class SearchRequest
     public SearchFilters? Filters { get; set; }
 
     public int Limit { get; set; } = 20;
+    public string? Language { get; set; }
+    public string EvidenceMode { get; set; } = "bilingual";
+    public string FusionMode { get; set; } = "rrf";
 }
 
 public class SearchFilters
@@ -51,6 +54,21 @@ public class SearchResultItem
     public int? ValueScore { get; set; }
     public double Score { get; set; }
     public ScoreDetail? ScoreDetail { get; set; }
+    public double FusionScore { get; set; }
+    public List<string> MatchChannels { get; set; } = new();
+    public string? TitleOriginal { get; set; }
+    public string? TitleZh { get; set; }
+    public string? OriginalSnippet { get; set; }
+    public string? LocalizedSnippet { get; set; }
+    public string? ContentLanguage { get; set; }
+    public string DisplayContentSource { get; set; } = "original";
+    public Guid? ChunkGroupId { get; set; }
+    public string? Section { get; set; }
+    public int? PageStart { get; set; }
+    public int? PageEnd { get; set; }
+    public Guid? LocalizationId { get; set; }
+    public string? TranslationType { get; set; }
+    public string? ReviewStatus { get; set; }
 }
 
 public class ScoreDetail
@@ -68,5 +86,7 @@ public class SearchDebugInfo
     public long? LatencyMs { get; set; }
     public int? KeywordMatchCount { get; set; }
     public int? VectorMatchCount { get; set; }
+    public int? FullTextMatchCount { get; set; }
+    public string? FusionMode { get; set; }
     public string? RewrittenQuery { get; set; }
 }

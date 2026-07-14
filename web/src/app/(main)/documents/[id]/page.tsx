@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   AiStatusBadge,
@@ -267,6 +268,9 @@ export default function DocumentDetailPage() {
 
   // 控制当前激活的 Tab（支持从 QA 引用跳转时切换到分块调试）
   const [activeTab, setActiveTab] = useState<string>("analysis");
+  const [languageView, setLanguageView] = useState<"zh" | "original">("zh");
+  const [localizationDraft, setLocalizationDraft] = useState<{ titleZh: string; summaryZh: string; keywords: string } | null>(null);
+  const [savingLocalization, setSavingLocalization] = useState(false);
 
   // Tag management state
   const [documentTags, setDocumentTags] = useState<DocumentTagItem[]>([]);
@@ -285,7 +289,13 @@ export default function DocumentDetailPage() {
     if (documentTagsData) setDocumentTags(documentTagsData);
   }, [documentTagsData]);
 
-  const { data: document, isLoading } = useQuery({
+  const {
+    data: document,
+    isLoading,
+    isFetching,
+    error: documentError,
+    refetch: refetchDocument,
+  } = useQuery({
     queryKey: ["document", documentId],
     queryFn: () => documentApi.get(documentId),
     enabled: !!documentId,
@@ -356,6 +366,24 @@ export default function DocumentDetailPage() {
   const handleRefresh = () => {
     queryClient.invalidateQueries({ queryKey: ["document", documentId] });
     toast.success("已刷新");
+  };
+
+  const saveLocalizedMetadata = async () => {
+    if (!localizationDraft) return;
+    setSavingLocalization(true);
+    try {
+      await documentApi.updateLocalizedMetadata(documentId, {
+        titleZh: localizationDraft.titleZh,
+        summaryZh: localizationDraft.summaryZh,
+        keywordsZh: localizationDraft.keywords.split(/[，,;；]/).map((item) => item.trim()).filter(Boolean),
+        approved: true,
+      });
+      toast.success("中文元数据已审核并更新索引");
+      setLocalizationDraft(null);
+      await queryClient.invalidateQueries({ queryKey: ["document", documentId] });
+    } catch (error) {
+      toast.error(error instanceof ApiRequestError ? error.message : "中文元数据保存失败");
+    } finally { setSavingLocalization(false); }
   };
 
   const handleRetry = async () => {
@@ -493,21 +521,34 @@ export default function DocumentDetailPage() {
     );
   }
 
-  if (!document) {
+  if (documentError) {
+    const isNotFound = documentError instanceof ApiRequestError && documentError.status === 404;
+    const message = documentError instanceof ApiRequestError
+      ? documentError.message
+      : "无法读取文档，请稍后重试。";
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <FileText className="mb-4 size-12 text-muted-foreground/50" />
-        <p className="text-lg font-medium">文档不存在</p>
-        <Button
-          variant="outline"
-          className="mt-4"
-          onClick={() => router.back()}
-        >
-          返回
-        </Button>
+        {isNotFound ? (
+          <FileText className="mb-4 size-12 text-muted-foreground/50" />
+        ) : (
+          <AlertCircle className="mb-4 size-12 text-destructive/70" />
+        )}
+        <p className="text-lg font-medium">{isNotFound ? "文档不存在" : "文档加载失败"}</p>
+        {!isNotFound && <p className="mt-2 max-w-lg text-sm text-muted-foreground">{message}</p>}
+        <div className="mt-4 flex gap-2">
+          <Button variant="outline" onClick={() => router.back()}>返回</Button>
+          {!isNotFound && (
+            <Button onClick={() => void refetchDocument()} disabled={isFetching}>
+              {isFetching && <Loader2 className="mr-2 size-4 animate-spin" />}
+              重试
+            </Button>
+          )}
+        </div>
       </div>
     );
   }
+
+  if (!document) return null;
 
   const keyPoints = parseJsonArray<KeyPointItem>(document.keyPoints);
   const businessSignals = parseJsonArray<SignalItem>(document.businessSignals);
@@ -546,7 +587,17 @@ export default function DocumentDetailPage() {
         <CardHeader>
           <div className="flex items-start justify-between">
             <div className="flex-1">
-              <CardTitle className="text-xl">{document.title}</CardTitle>
+              <div className="flex flex-wrap items-center gap-3">
+                <CardTitle className="text-xl">
+                  {languageView === "zh" ? document.titleZh || document.title : document.titleOriginal || document.title}
+                </CardTitle>
+                {(document.titleZh || document.summaryZh) && (
+                  <div className="flex rounded-md border p-0.5">
+                    <Button variant={languageView === "zh" ? "secondary" : "ghost"} size="xs" onClick={() => setLanguageView("zh")}>中文视图</Button>
+                    <Button variant={languageView === "original" ? "secondary" : "ghost"} size="xs" onClick={() => setLanguageView("original")}>原文视图</Button>
+                  </div>
+                )}
+              </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <AiStatusBadge status={document.aiStatus} />
                 {document.valueScore !== undefined && (
@@ -569,6 +620,10 @@ export default function DocumentDetailPage() {
                 <ProcessingStageBadge label="AI摘要" status={document.aiStatus} />
                 <ProcessingStageBadge label="分块" status={document.chunkStatus || "pending"} />
                 <ProcessingStageBadge label="索引" status={document.indexStatus || "pending"} />
+                {document.primaryLanguage && <Badge variant="outline">{document.primaryLanguage}</Badge>}
+                {document.localizationLevel && <Badge variant="secondary">{document.localizationLevel}</Badge>}
+                {document.localizationStatus === "review_required" && <Badge variant="outline" className="border-amber-300 text-amber-700">中文元数据需复核</Badge>}
+                {document.localizationQualityScore !== undefined && <Badge variant="outline">中文质量 {document.localizationQualityScore}</Badge>}
               </div>
             </div>
             <div className="flex gap-2">
@@ -684,16 +739,24 @@ export default function DocumentDetailPage() {
           <div className="space-y-4">
             {/* 1. 中文摘要 */}
             <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <FileText className="size-4 text-blue-600" />
-                  中文摘要
-                </CardTitle>
+              <CardHeader className="flex-row items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-base"><FileText className="size-4 text-blue-600" />中文摘要</CardTitle>
+                {document.summaryZh && !localizationDraft && (
+                  <Button variant="outline" size="xs" onClick={() => setLocalizationDraft({
+                    titleZh: document.titleZh || document.title,
+                    summaryZh: document.summaryZh || document.summary || "",
+                    keywords: parseJsonArray<string>(document.keywordsZh).join("，"),
+                  })}>审核/编辑</Button>
+                )}
               </CardHeader>
               <CardContent>
-                <p className="text-sm leading-relaxed">
-                  {document.summary || "暂无摘要"}
-                </p>
+                {localizationDraft ? <div className="space-y-3">
+                  <Input value={localizationDraft.titleZh} onChange={(e) => setLocalizationDraft({ ...localizationDraft, titleZh: e.target.value })} placeholder="中文标题" />
+                  <Textarea value={localizationDraft.summaryZh} onChange={(e) => setLocalizationDraft({ ...localizationDraft, summaryZh: e.target.value })} rows={6} placeholder="中文摘要" />
+                  <Input value={localizationDraft.keywords} onChange={(e) => setLocalizationDraft({ ...localizationDraft, keywords: e.target.value })} placeholder="中文关键词，使用逗号分隔" />
+                  <div className="flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setLocalizationDraft(null)}>取消</Button>
+                    <Button size="sm" disabled={savingLocalization} onClick={() => void saveLocalizedMetadata()}>{savingLocalization && <Loader2 className="mr-2 size-4 animate-spin" />}确认并更新索引</Button></div>
+                </div> : <p className="text-sm leading-relaxed">{(languageView === "zh" ? document.summaryZh || document.summary : document.summary) || "暂无摘要"}</p>}
               </CardContent>
             </Card>
 
