@@ -76,6 +76,12 @@ import type {
   CloudInboxPullInput,
   CloudInboxPullResult,
   CloudInboxSyncLog,
+  CloudAccountBinding,
+  WorkspaceBinding,
+  OAuthStartInput,
+  OAuthStartResult,
+  OAuthStatus,
+  CreateWorkspaceBindingInput,
   MobileDevice,
   PushNotification,
   LocalConfig,
@@ -98,7 +104,13 @@ import type {
   AgentToolDefinition,
 } from "./types";
 
-const API_BASE_URL = "http://127.0.0.1:9101/api";
+const currentPort =
+  typeof window !== "undefined" ? Number(window.location.port) : Number.NaN;
+const isDesktopPort = currentPort >= 43120 && currentPort <= 43218;
+const API_BASE_URL = isDesktopPort
+  ? `http://127.0.0.1:${currentPort + 1}/api`
+  : "http://127.0.0.1:9101/api";
+export const API_ORIGIN = API_BASE_URL.replace(/\/api$/, "");
 const TOKEN_KEY = "access_token";
 
 /** 获取 localStorage 中的 token */
@@ -1182,6 +1194,80 @@ export const cloudInboxApi = {
       method: "GET",
       url: "/cloud-inbox/logs",
       params: { limit },
+    });
+  },
+
+  retryScheduledPull(): Promise<{ queued: boolean }> {
+    return request<{ queued: boolean }>({
+      method: "POST",
+      url: "/cloud-inbox/schedule/retry",
+    });
+  },
+
+  cancelScheduledPull(): Promise<{ cancelled: boolean }> {
+    return request<{ cancelled: boolean }>({
+      method: "POST",
+      url: "/cloud-inbox/schedule/cancel",
+    });
+  },
+};
+
+// ===== Cloud Account / Workspace Binding API =====
+
+export const bindingApi = {
+  listCloudAccounts(): Promise<CloudAccountBinding[]> {
+    return request<CloudAccountBinding[]>({
+      method: "GET",
+      url: "/bindings/cloud-accounts",
+    });
+  },
+
+  listWorkspaceBindings(workspaceId?: string): Promise<WorkspaceBinding[]> {
+    return request<WorkspaceBinding[]>({
+      method: "GET",
+      url: "/bindings/workspaces",
+      params: workspaceId ? { workspaceId } : undefined,
+    });
+  },
+
+  createWorkspaceBinding(
+    data: CreateWorkspaceBindingInput
+  ): Promise<WorkspaceBinding> {
+    return request<WorkspaceBinding>({
+      method: "POST",
+      url: "/bindings/workspaces",
+      data,
+    });
+  },
+
+  unbindWorkspace(id: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/bindings/workspaces/${encodeURIComponent(id)}`,
+    });
+  },
+
+  unbindCloudAccount(id: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/bindings/cloud-accounts/${encodeURIComponent(id)}`,
+    });
+  },
+};
+
+export const oauthApi = {
+  start(data: OAuthStartInput): Promise<OAuthStartResult> {
+    return request<OAuthStartResult>({
+      method: "POST",
+      url: "/oauth/start",
+      data,
+    });
+  },
+
+  status(sessionId: string): Promise<OAuthStatus> {
+    return request<OAuthStatus>({
+      method: "GET",
+      url: `/oauth/status/${encodeURIComponent(sessionId)}`,
     });
   },
 };

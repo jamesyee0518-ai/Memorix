@@ -197,6 +197,23 @@ UPDATE document_chunks SET content_original = content WHERE content_original = '
         await AddColumnIfNotExistsAsync(conn, "beta_users", "beta_group", "TEXT", ct);
         await AddColumnIfNotExistsAsync(conn, "beta_users", "platform", "TEXT", ct);
 
+        // Identity, device, binding, and explicit sync-mode foundation.
+        await AddColumnIfNotExistsAsync(conn, "workspaces", "sync_mode", "TEXT NOT NULL DEFAULT 'none'", ct);
+        await AddColumnIfNotExistsAsync(conn, "device_identities", "private_key_ref", "TEXT NOT NULL DEFAULT ''", ct);
+        await using (var syncModeBackfill = conn.CreateCommand())
+        {
+            syncModeBackfill.CommandText = """
+                UPDATE workspaces
+                SET sync_mode = CASE
+                    WHEN inbox_enabled = 1 THEN 'inbox_only'
+                    WHEN sync_enabled = 1 THEN 'metadata'
+                    ELSE 'none'
+                END
+                WHERE sync_mode IS NULL OR sync_mode = '' OR sync_mode = 'none';
+                """;
+            await syncModeBackfill.ExecuteNonQueryAsync(ct);
+        }
+
         _logger.LogInformation("Phase 2 migrations completed");
         _logger.LogInformation("Phase 3 migrations completed");
         _logger.LogInformation("Phase 4 migrations completed");
@@ -268,6 +285,7 @@ UPDATE document_chunks SET content_original = content WHERE content_original = '
             cloud_workspace_id TEXT,
             sync_enabled INTEGER NOT NULL DEFAULT 0,
             inbox_enabled INTEGER NOT NULL DEFAULT 0,
+            sync_mode TEXT NOT NULL DEFAULT 'none',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
@@ -430,6 +448,90 @@ UPDATE document_chunks SET content_original = content WHERE content_original = '
             updated_at TEXT NOT NULL
         )",
         @"CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_cursor ON sync_cursors(workspace_id, remote_workspace_id, cursor_type)",
+
+        // ===== identity and workspace binding foundation =====
+        @"CREATE TABLE IF NOT EXISTS local_installations (
+            id TEXT PRIMARY KEY,
+            installation_key TEXT NOT NULL UNIQUE,
+            platform TEXT NOT NULL,
+            device_name TEXT NOT NULL,
+            app_version TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE TABLE IF NOT EXISTS local_profiles (
+            id TEXT PRIMARY KEY,
+            installation_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_local_profiles_installation_status ON local_profiles(installation_id, status)",
+        @"CREATE TABLE IF NOT EXISTS device_identities (
+            id TEXT PRIMARY KEY,
+            installation_id TEXT NOT NULL,
+            device_key TEXT NOT NULL UNIQUE,
+            public_key TEXT NOT NULL,
+            private_key_ref TEXT NOT NULL,
+            key_algorithm TEXT NOT NULL DEFAULT 'ed25519',
+            status TEXT NOT NULL DEFAULT 'active',
+            last_seen_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE TABLE IF NOT EXISTS cloud_account_bindings (
+            id TEXT PRIMARY KEY,
+            local_profile_id TEXT NOT NULL,
+            cloud_user_id TEXT NOT NULL,
+            cloud_api_base_url TEXT NOT NULL,
+            account_display_name TEXT,
+            account_email_masked TEXT,
+            token_key_ref TEXT NOT NULL UNIQUE,
+            binding_status TEXT NOT NULL DEFAULT 'active',
+            last_authenticated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(local_profile_id, cloud_api_base_url, cloud_user_id)
+        )",
+        @"CREATE TABLE IF NOT EXISTS workspace_bindings (
+            id TEXT PRIMARY KEY,
+            local_workspace_id TEXT NOT NULL,
+            cloud_account_binding_id TEXT NOT NULL,
+            cloud_workspace_id TEXT NOT NULL,
+            sync_mode TEXT NOT NULL DEFAULT 'none',
+            binding_status TEXT NOT NULL DEFAULT 'active',
+            primary_device_id TEXT,
+            upload_original_files INTEGER NOT NULL DEFAULT 0,
+            conflict_policy TEXT NOT NULL DEFAULT 'manual',
+            last_inbox_cursor TEXT,
+            last_sync_cursor TEXT,
+            last_sync_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(local_workspace_id, cloud_workspace_id)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_workspace_bindings_account_status ON workspace_bindings(cloud_account_binding_id, binding_status)",
+        @"CREATE TABLE IF NOT EXISTS sync_inbox_staging (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            binding_id TEXT,
+            cloud_inbox_item_id TEXT NOT NULL,
+            cloud_revision INTEGER,
+            content_hash TEXT,
+            remote_metadata_json TEXT,
+            status TEXT NOT NULL DEFAULT 'discovered',
+            local_inbox_item_id TEXT,
+            duplicate_document_id TEXT,
+            import_batch_id TEXT,
+            error_message TEXT,
+            discovered_at TEXT NOT NULL,
+            imported_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, cloud_inbox_item_id)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_sync_inbox_staging_status ON sync_inbox_staging(workspace_id, status, discovered_at)",
 
         // ===== cloud_inbox_sync_logs =====
         @"CREATE TABLE IF NOT EXISTS cloud_inbox_sync_logs (

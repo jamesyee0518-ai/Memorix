@@ -73,6 +73,12 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<ChunkLocalization> ChunkLocalizations => Set<ChunkLocalization>();
     public DbSet<ChunkEnrichment> ChunkEnrichments => Set<ChunkEnrichment>();
     public DbSet<MultilingualBatchJob> MultilingualBatchJobs => Set<MultilingualBatchJob>();
+    public DbSet<LocalInstallation> LocalInstallations => Set<LocalInstallation>();
+    public DbSet<LocalProfile> LocalProfiles => Set<LocalProfile>();
+    public DbSet<DeviceIdentity> DeviceIdentities => Set<DeviceIdentity>();
+    public DbSet<CloudAccountBinding> CloudAccountBindings => Set<CloudAccountBinding>();
+    public DbSet<WorkspaceBinding> WorkspaceBindings => Set<WorkspaceBinding>();
+    public DbSet<SyncInboxStaging> SyncInboxStaging => Set<SyncInboxStaging>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -142,6 +148,8 @@ public class AppDbContext : DbContext, IAppDbContext
         ConfigureChunkLocalization(modelBuilder);
         ConfigureChunkEnrichment(modelBuilder);
         ConfigureMultilingualBatchJob(modelBuilder);
+        ConfigureIdentityAndBindingFoundation(modelBuilder);
+        ConfigureSyncInboxStaging(modelBuilder);
     }
 
     /// <summary>
@@ -363,6 +371,168 @@ public class AppDbContext : DbContext, IAppDbContext
         }
     }
 
+    public async Task EnsureIdentityAndBindingSetupAsync(CancellationToken ct = default)
+    {
+        var isPostgres = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true;
+        if (isPostgres)
+        {
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role varchar(50) NOT NULL DEFAULT 'user'", ct);
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_users_role ON users(role)", ct);
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS sync_mode varchar(30) NOT NULL DEFAULT 'none'", ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS local_installations (
+                    id uuid PRIMARY KEY, installation_key varchar(100) NOT NULL UNIQUE,
+                    platform varchar(50) NOT NULL, device_name varchar(200) NOT NULL,
+                    app_version varchar(50) NOT NULL DEFAULT '', status varchar(30) NOT NULL DEFAULT 'active',
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS local_profiles (
+                    id uuid PRIMARY KEY, installation_id uuid NOT NULL, display_name varchar(200) NOT NULL,
+                    status varchar(30) NOT NULL DEFAULT 'active',
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS device_identities (
+                    id uuid PRIMARY KEY, installation_id uuid NOT NULL, device_key varchar(100) NOT NULL UNIQUE,
+                    public_key text NOT NULL, private_key_ref varchar(300) NOT NULL,
+                    key_algorithm varchar(30) NOT NULL,
+                    status varchar(30) NOT NULL DEFAULT 'active', last_seen_at timestamp with time zone,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE device_identities ADD COLUMN IF NOT EXISTS private_key_ref varchar(300) NOT NULL DEFAULT ''", ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS cloud_account_bindings (
+                    id uuid PRIMARY KEY, local_profile_id uuid NOT NULL, cloud_user_id varchar(200) NOT NULL,
+                    cloud_api_base_url varchar(2048) NOT NULL, account_display_name varchar(200),
+                    account_email_masked varchar(320), token_key_ref varchar(300) NOT NULL UNIQUE,
+                    binding_status varchar(30) NOT NULL DEFAULT 'active',
+                    last_authenticated_at timestamp with time zone,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL,
+                    UNIQUE(local_profile_id, cloud_api_base_url, cloud_user_id))
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS workspace_bindings (
+                    id uuid PRIMARY KEY, local_workspace_id uuid NOT NULL, cloud_account_binding_id uuid NOT NULL,
+                    cloud_workspace_id varchar(200) NOT NULL, sync_mode varchar(30) NOT NULL DEFAULT 'none',
+                    binding_status varchar(30) NOT NULL DEFAULT 'active', primary_device_id uuid,
+                    upload_original_files boolean NOT NULL DEFAULT false,
+                    conflict_policy varchar(30) NOT NULL DEFAULT 'manual', last_inbox_cursor text,
+                    last_sync_cursor text, last_sync_at timestamp with time zone,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL,
+                    UNIQUE(local_workspace_id, cloud_workspace_id))
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS sync_inbox_staging (
+                    id uuid PRIMARY KEY, workspace_id uuid NOT NULL, binding_id uuid,
+                    cloud_inbox_item_id varchar(300) NOT NULL, cloud_revision bigint,
+                    content_hash varchar(128), remote_metadata_json text,
+                    status varchar(30) NOT NULL DEFAULT 'discovered', local_inbox_item_id uuid,
+                    duplicate_document_id uuid, import_batch_id uuid, error_message varchar(2000),
+                    discovered_at timestamp with time zone NOT NULL, imported_at timestamp with time zone,
+                    updated_at timestamp with time zone NOT NULL,
+                    UNIQUE(workspace_id, cloud_inbox_item_id))
+                """, ct);
+        }
+        else if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            if (await SqliteTableExistsAsync("users", ct))
+            {
+                await AddSqliteColumnIfMissingAsync(
+                    "users", "role", "TEXT NOT NULL DEFAULT 'user'", ct);
+            }
+            await AddSqliteColumnIfMissingAsync(
+                "workspaces", "sync_mode", "TEXT NOT NULL DEFAULT 'none'", ct);
+            var statements = new[]
+            {
+                """
+                CREATE TABLE IF NOT EXISTS local_installations (
+                    id TEXT PRIMARY KEY, installation_key TEXT NOT NULL UNIQUE, platform TEXT NOT NULL,
+                    device_name TEXT NOT NULL, app_version TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS local_profiles (
+                    id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, display_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS device_identities (
+                    id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, device_key TEXT NOT NULL UNIQUE,
+                    public_key TEXT NOT NULL, private_key_ref TEXT NOT NULL, key_algorithm TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    last_seen_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS cloud_account_bindings (
+                    id TEXT PRIMARY KEY, local_profile_id TEXT NOT NULL, cloud_user_id TEXT NOT NULL,
+                    cloud_api_base_url TEXT NOT NULL, account_display_name TEXT, account_email_masked TEXT,
+                    token_key_ref TEXT NOT NULL UNIQUE, binding_status TEXT NOT NULL DEFAULT 'active',
+                    last_authenticated_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(local_profile_id, cloud_api_base_url, cloud_user_id))
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS workspace_bindings (
+                    id TEXT PRIMARY KEY, local_workspace_id TEXT NOT NULL, cloud_account_binding_id TEXT NOT NULL,
+                    cloud_workspace_id TEXT NOT NULL, sync_mode TEXT NOT NULL DEFAULT 'none',
+                    binding_status TEXT NOT NULL DEFAULT 'active', primary_device_id TEXT,
+                    upload_original_files INTEGER NOT NULL DEFAULT 0,
+                    conflict_policy TEXT NOT NULL DEFAULT 'manual', last_inbox_cursor TEXT,
+                    last_sync_cursor TEXT, last_sync_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(local_workspace_id, cloud_workspace_id))
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS sync_inbox_staging (
+                    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT,
+                    cloud_inbox_item_id TEXT NOT NULL, cloud_revision INTEGER, content_hash TEXT,
+                    remote_metadata_json TEXT, status TEXT NOT NULL DEFAULT 'discovered',
+                    local_inbox_item_id TEXT, duplicate_document_id TEXT, import_batch_id TEXT,
+                    error_message TEXT, discovered_at TEXT NOT NULL, imported_at TEXT,
+                    updated_at TEXT NOT NULL, UNIQUE(workspace_id, cloud_inbox_item_id))
+                """
+            };
+            foreach (var statement in statements)
+            {
+                await Database.ExecuteSqlRawAsync(statement, ct);
+            }
+            await AddSqliteColumnIfMissingAsync(
+                "device_identities", "private_key_ref", "TEXT NOT NULL DEFAULT ''", ct);
+        }
+
+        await Database.ExecuteSqlRawAsync(isPostgres
+            ? """
+              UPDATE workspaces
+              SET sync_mode = CASE
+                  WHEN inbox_enabled THEN 'inbox_only'
+                  WHEN sync_enabled THEN 'metadata'
+                  ELSE 'none'
+              END
+              WHERE sync_mode IS NULL OR sync_mode = ''
+                 OR (sync_mode = 'none' AND (inbox_enabled OR sync_enabled))
+              """
+            : """
+              UPDATE workspaces
+              SET sync_mode = CASE
+                  WHEN inbox_enabled = 1 THEN 'inbox_only'
+                  WHEN sync_enabled = 1 THEN 'metadata'
+                  ELSE 'none'
+              END
+              WHERE sync_mode IS NULL OR sync_mode = ''
+                 OR (sync_mode = 'none' AND (inbox_enabled = 1 OR sync_enabled = 1))
+              """, ct);
+
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_local_profiles_installation_status ON local_profiles(installation_id, status)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_workspace_bindings_account_status ON workspace_bindings(cloud_account_binding_id, binding_status)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_sync_inbox_staging_status ON sync_inbox_staging(workspace_id, status, discovered_at)", ct);
+    }
+
     private async Task AddSqliteColumnIfMissingAsync(string table, string column, string definition, CancellationToken ct)
     {
         var connection = Database.GetDbConnection();
@@ -381,6 +551,27 @@ public class AppDbContext : DbContext, IAppDbContext
             await using var alter = connection.CreateCommand();
             alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
             await alter.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (closeWhenDone) await connection.CloseAsync();
+        }
+    }
+
+    private async Task<bool> SqliteTableExistsAsync(string table, CancellationToken ct)
+    {
+        var connection = Database.GetDbConnection();
+        var closeWhenDone = connection.State != System.Data.ConnectionState.Open;
+        if (closeWhenDone) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $table";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "$table";
+            parameter.Value = table;
+            command.Parameters.Add(parameter);
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct)) > 0;
         }
         finally
         {
@@ -482,12 +673,14 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(u => u.PasswordHash).IsRequired().HasMaxLength(255);
         e.Property(u => u.AvatarUrl).HasMaxLength(1024);
         e.Property(u => u.PlanCode).IsRequired().HasMaxLength(50);
+        e.Property(u => u.Role).IsRequired().HasMaxLength(50);
         e.Property(u => u.Status).IsRequired().HasMaxLength(50);
         e.Property(u => u.Timezone).IsRequired().HasMaxLength(64);
         e.Property(u => u.CreatedAt).IsRequired();
         e.Property(u => u.UpdatedAt).IsRequired();
 
         e.HasIndex(u => u.Email).IsUnique();
+        e.HasIndex(u => u.Role);
     }
 
     private static void ConfigureTopic(ModelBuilder modelBuilder)
@@ -1501,12 +1694,99 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(w => w.LocalVaultPath).HasMaxLength(1024);
         e.Property(w => w.CloudApiBaseUrl).HasMaxLength(2048);
         e.Property(w => w.CloudWorkspaceId).HasMaxLength(200);
+        e.Property(w => w.SyncMode).IsRequired().HasMaxLength(30);
         e.Property(w => w.ModelConfig).HasColumnType("text");
         e.Property(w => w.CreatedAt).IsRequired();
         e.Property(w => w.UpdatedAt).IsRequired();
 
         e.HasIndex(w => w.UserId);
         e.HasIndex(w => w.Mode);
+        e.HasIndex(w => w.SyncMode);
+    }
+
+    private static void ConfigureIdentityAndBindingFoundation(ModelBuilder modelBuilder)
+    {
+        var installation = modelBuilder.Entity<LocalInstallation>();
+        installation.ToTable("local_installations");
+        installation.HasKey(x => x.Id);
+        installation.Property(x => x.Id).HasColumnType("uuid");
+        installation.Property(x => x.InstallationKey).IsRequired().HasMaxLength(100);
+        installation.Property(x => x.Platform).IsRequired().HasMaxLength(50);
+        installation.Property(x => x.DeviceName).IsRequired().HasMaxLength(200);
+        installation.Property(x => x.AppVersion).HasMaxLength(50);
+        installation.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        installation.HasIndex(x => x.InstallationKey).IsUnique();
+
+        var profile = modelBuilder.Entity<LocalProfile>();
+        profile.ToTable("local_profiles");
+        profile.HasKey(x => x.Id);
+        profile.Property(x => x.Id).HasColumnType("uuid");
+        profile.Property(x => x.InstallationId).HasColumnType("uuid");
+        profile.Property(x => x.DisplayName).IsRequired().HasMaxLength(200);
+        profile.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        profile.HasIndex(x => new { x.InstallationId, x.Status });
+
+        var device = modelBuilder.Entity<DeviceIdentity>();
+        device.ToTable("device_identities");
+        device.HasKey(x => x.Id);
+        device.Property(x => x.Id).HasColumnType("uuid");
+        device.Property(x => x.InstallationId).HasColumnType("uuid");
+        device.Property(x => x.DeviceKey).IsRequired().HasMaxLength(100);
+        device.Property(x => x.PublicKey).IsRequired().HasColumnType("text");
+        device.Property(x => x.PrivateKeyRef).IsRequired().HasMaxLength(300);
+        device.Property(x => x.KeyAlgorithm).IsRequired().HasMaxLength(30);
+        device.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        device.HasIndex(x => x.DeviceKey).IsUnique();
+
+        var account = modelBuilder.Entity<CloudAccountBinding>();
+        account.ToTable("cloud_account_bindings");
+        account.HasKey(x => x.Id);
+        account.Property(x => x.Id).HasColumnType("uuid");
+        account.Property(x => x.LocalProfileId).HasColumnType("uuid");
+        account.Property(x => x.CloudUserId).IsRequired().HasMaxLength(200);
+        account.Property(x => x.CloudApiBaseUrl).IsRequired().HasMaxLength(2048);
+        account.Property(x => x.AccountDisplayName).HasMaxLength(200);
+        account.Property(x => x.AccountEmailMasked).HasMaxLength(320);
+        account.Property(x => x.TokenKeyRef).IsRequired().HasMaxLength(300);
+        account.Property(x => x.BindingStatus).IsRequired().HasMaxLength(30);
+        account.HasIndex(x => new { x.LocalProfileId, x.CloudApiBaseUrl, x.CloudUserId }).IsUnique();
+        account.HasIndex(x => x.TokenKeyRef).IsUnique();
+
+        var binding = modelBuilder.Entity<WorkspaceBinding>();
+        binding.ToTable("workspace_bindings");
+        binding.HasKey(x => x.Id);
+        binding.Property(x => x.Id).HasColumnType("uuid");
+        binding.Property(x => x.LocalWorkspaceId).HasColumnType("uuid");
+        binding.Property(x => x.CloudAccountBindingId).HasColumnType("uuid");
+        binding.Property(x => x.CloudWorkspaceId).IsRequired().HasMaxLength(200);
+        binding.Property(x => x.SyncMode).IsRequired().HasMaxLength(30);
+        binding.Property(x => x.BindingStatus).IsRequired().HasMaxLength(30);
+        binding.Property(x => x.PrimaryDeviceId).HasColumnType("uuid");
+        binding.Property(x => x.ConflictPolicy).IsRequired().HasMaxLength(30);
+        binding.Property(x => x.LastInboxCursor).HasMaxLength(1000);
+        binding.Property(x => x.LastSyncCursor).HasMaxLength(1000);
+        binding.HasIndex(x => new { x.LocalWorkspaceId, x.CloudWorkspaceId }).IsUnique();
+        binding.HasIndex(x => new { x.CloudAccountBindingId, x.BindingStatus });
+    }
+
+    private static void ConfigureSyncInboxStaging(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<SyncInboxStaging>();
+        e.ToTable("sync_inbox_staging");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnType("uuid");
+        e.Property(x => x.BindingId).HasColumnType("uuid");
+        e.Property(x => x.CloudInboxItemId).IsRequired().HasMaxLength(300);
+        e.Property(x => x.ContentHash).HasMaxLength(128);
+        e.Property(x => x.RemoteMetadataJson).HasColumnType("text");
+        e.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        e.Property(x => x.LocalInboxItemId).HasColumnType("uuid");
+        e.Property(x => x.DuplicateDocumentId).HasColumnType("uuid");
+        e.Property(x => x.ImportBatchId).HasColumnType("uuid");
+        e.Property(x => x.ErrorMessage).HasMaxLength(2000);
+        e.HasIndex(x => new { x.WorkspaceId, x.CloudInboxItemId }).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.Status, x.DiscoveredAt });
     }
 
     private static void ConfigureInboxItem(ModelBuilder modelBuilder)

@@ -36,6 +36,42 @@ public class SqliteSchemaUpgradeTests
         Assert.Equal("Legacy content", await ScalarAsync(connection, "SELECT content_original FROM document_chunks WHERE Id = 'chunk-1'"));
     }
 
+    [Fact]
+    public async Task EnsureIdentityAndBindingSetupAsync_UpgradesLegacyWorkspaceSchema()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await ExecuteAsync(connection, """
+            CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                sync_enabled INTEGER NOT NULL DEFAULT 0,
+                inbox_enabled INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO workspaces (id, sync_enabled, inbox_enabled) VALUES ('ws-inbox', 1, 1);
+            INSERT INTO workspaces (id, sync_enabled, inbox_enabled) VALUES ('ws-metadata', 1, 0);
+            """);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new AppDbContext(options);
+
+        await db.EnsureIdentityAndBindingSetupAsync();
+
+        Assert.True(await HasColumnAsync(connection, "workspaces", "sync_mode"));
+        Assert.True(await HasTableAsync(connection, "local_installations"));
+        Assert.True(await HasTableAsync(connection, "local_profiles"));
+        Assert.True(await HasTableAsync(connection, "device_identities"));
+        Assert.True(await HasTableAsync(connection, "cloud_account_bindings"));
+        Assert.True(await HasTableAsync(connection, "workspace_bindings"));
+        Assert.True(await HasTableAsync(connection, "sync_inbox_staging"));
+        Assert.Equal("inbox_only", await ScalarAsync(
+            connection, "SELECT sync_mode FROM workspaces WHERE id = 'ws-inbox'"));
+        Assert.Equal("metadata", await ScalarAsync(
+            connection, "SELECT sync_mode FROM workspaces WHERE id = 'ws-metadata'"));
+    }
+
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();

@@ -2,12 +2,13 @@ using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using KnowledgeEngine.Application.Security;
 
 namespace KnowledgeEngine.Api.Controllers;
 
 [ApiController]
 [Route("api/mobile/push-notifications")]
-[Authorize]
+[Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
 public class PushNotificationsController : BaseController
 {
     private readonly IConfigService _configService;

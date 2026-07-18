@@ -17,6 +17,10 @@ public class MinioSettings
     public string SecretKey { get; set; } = string.Empty;
     public string Bucket { get; set; } = "knowledge-engine";
     public bool UseSsl { get; set; } = false;
+    public bool ForcePathStyle { get; set; } = true;
+    public bool AutoCreateBucket { get; set; } = true;
+    public bool UseConfiguredBucket { get; set; } = false;
+    public string Region { get; set; } = "us-east-1";
 }
 
 public class CorsSettings

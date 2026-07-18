@@ -621,20 +621,20 @@ public class SearchService : ISearchService
         var whereSql = string.Join(" AND ", whereClauses);
 
         return $@"
-            SELECT c.""Id"" AS chunk_id,
-                   c.""DocumentId"" AS document_id,
-                   c.""Content"" AS content,
-                   d.""Title"" AS title,
-                   d.""ValueScore"" AS value_score,
-                   d.""CreatedAt"" AS doc_created_at,
-                   s.""Url"" AS source_url,
-                   s.""SourceType"" AS source_type,
-                   s.""Domain"" AS source_domain,
-                   s.""PublishedAt"" AS published_at,
+            SELECT c.id AS chunk_id,
+                   c.document_id AS document_id,
+                   c.content AS content,
+                   d.title AS title,
+                   d.value_score AS value_score,
+                   d.created_at AS doc_created_at,
+                   s.url AS source_url,
+                   s.source_type AS source_type,
+                   s.domain AS source_domain,
+                   s.published_at AS published_at,
                    1 - (c.embedding <=> @queryEmbedding::vector) AS similarity
             FROM document_chunks c
-            JOIN documents d ON c.""DocumentId"" = d.""Id""
-            JOIN sources s ON d.""SourceId"" = s.""Id""
+            JOIN documents d ON c.document_id = d.id
+            JOIN sources s ON d.source_id = s.id
             WHERE {whereSql}
             ORDER BY c.embedding <=> @queryEmbedding::vector
             LIMIT 50";

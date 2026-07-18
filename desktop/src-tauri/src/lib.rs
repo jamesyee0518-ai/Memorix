@@ -27,7 +27,7 @@ impl Drop for Sidecars {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![open_directory])
+        .invoke_handler(tauri::generate_handler![open_directory, open_external_url])
         .manage(Mutex::new(Sidecars {
             api: None,
             web: None,
@@ -41,9 +41,9 @@ pub fn run() {
 
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || match start_production_sidecars(&app_handle) {
-                    Ok(()) => {
+                    Ok(web_port) => {
                         if let Some(window) = app_handle.get_webview_window("main") {
-                            if let Ok(url) = "http://127.0.0.1:3000".parse() {
+                            if let Ok(url) = format!("http://127.0.0.1:{web_port}").parse() {
                                 let _ = window.navigate(url);
                             }
                             let _ = window.set_title("Memorix");
@@ -130,8 +130,44 @@ fn open_directory(path: String) -> Result<(), String> {
         .map_err(|error| format!("无法打开目录: {error}"))
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|_| "外部链接格式无效".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("仅允许打开 HTTPS 外部链接".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("rundll32.exe");
+        command
+            .arg("url.dll,FileProtocolHandler")
+            .arg(parsed.as_str());
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg(parsed.as_str());
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(parsed.as_str());
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开浏览器: {error}"))
+}
+
 #[cfg(not(debug_assertions))]
-fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+fn start_production_sidecars(app: &tauri::AppHandle) -> Result<u16, Box<dyn std::error::Error>> {
     let resource_dir = app.path().resource_dir()?.join("resources");
     let app_data_dir = app.path().app_data_dir()?;
     std::fs::create_dir_all(&app_data_dir)?;
@@ -141,16 +177,22 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
     let web_dir = resource_dir.join("web");
     let web_server_path = web_dir.join("server.js");
 
-    if !port_is_open(9101) && !api_path.is_file() {
+    if !api_path.is_file() {
         return Err(format!("Bundled API executable is missing: {}", api_path.display()).into());
     }
 
-    let mut api = if !port_is_open(9101) {
+    let (web_port, api_port) = find_available_port_pair()?;
+
+    let mut api = {
         let (stdout, stderr) = log_stdio(&log_dir.join("api.log"))?;
         let mut command = Command::new(&api_path);
         command
             .current_dir(api_path.parent().ok_or("Invalid API resource path")?)
-            .env("ASPNETCORE_URLS", "http://127.0.0.1:9101")
+            .env("ASPNETCORE_URLS", format!("http://127.0.0.1:{api_port}"))
+            .env(
+                "Cors__AllowedOrigins__0",
+                format!("http://127.0.0.1:{web_port}"),
+            )
             .env("DatabaseProvider", "sqlite")
             .env("AppDatabasePath", app_data_dir.join("memorix.db"))
             .env("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false")
@@ -166,12 +208,10 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
                 ),
             )
         })?)
-    } else {
-        None
     };
 
     let web_log_path = log_dir.join("web.log");
-    let mut web = if !port_is_open(3000) {
+    let mut web = {
         let (stdout, stderr) = log_stdio(&web_log_path)?;
         let mut command = web_command(&resource_dir, &web_server_path)?;
         configure_background_command(&mut command);
@@ -179,7 +219,7 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
             command
                 .current_dir(&web_dir)
                 .env("NODE_ENV", "production")
-                .env("PORT", "3000")
+                .env("PORT", web_port.to_string())
                 .env("HOSTNAME", "127.0.0.1")
                 .stdout(stdout)
                 .stderr(stderr)
@@ -194,12 +234,17 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
                     )
                 })?,
         )
-    } else {
-        None
     };
 
-    if let Err(error) = wait_for_port(9101, Duration::from_secs(30), api.as_mut(), "API")
-        .and_then(|_| wait_for_port(3000, Duration::from_secs(30), web.as_mut(), "Web runtime"))
+    if let Err(error) = wait_for_port(api_port, Duration::from_secs(30), api.as_mut(), "API")
+        .and_then(|_| {
+            wait_for_port(
+                web_port,
+                Duration::from_secs(30),
+                web.as_mut(),
+                "Web runtime",
+            )
+        })
     {
         for child in [&mut api, &mut web].into_iter().flatten() {
             let _ = child.kill();
@@ -216,7 +261,7 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<(), Box<dyn std::
         sidecars.api = api;
         sidecars.web = web;
     }
-    Ok(())
+    Ok(web_port)
 }
 
 #[cfg(not(debug_assertions))]
@@ -282,6 +327,22 @@ fn read_log_tail(path: &std::path::Path, max_bytes: usize) -> Option<String> {
 #[cfg(not(debug_assertions))]
 fn port_is_open(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+}
+
+#[cfg(not(debug_assertions))]
+fn find_available_port_pair() -> Result<(u16, u16), Box<dyn std::error::Error>> {
+    for web_port in (43120..=43218).step_by(2) {
+        let api_port = web_port + 1;
+        if let (Ok(web_listener), Ok(api_listener)) = (
+            std::net::TcpListener::bind(("127.0.0.1", web_port)),
+            std::net::TcpListener::bind(("127.0.0.1", api_port)),
+        ) {
+            drop(web_listener);
+            drop(api_listener);
+            return Ok((web_port, api_port));
+        }
+    }
+    Err("Memorix could not find two available local ports".into())
 }
 
 #[cfg(not(debug_assertions))]

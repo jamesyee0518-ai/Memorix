@@ -22,17 +22,20 @@ public class MobileDevicesController : BaseController
     private readonly IConfigService _configService;
     private readonly IKnowledgeRepository _repo;
     private readonly IJwtTokenService _jwtTokenService;
+    private readonly IWorkspaceAuthorizationService _workspaceAuthorization;
     private readonly JwtSettings _jwtSettings;
 
     public MobileDevicesController(
         IConfigService configService,
         IKnowledgeRepository repo,
         IJwtTokenService jwtTokenService,
+        IWorkspaceAuthorizationService workspaceAuthorization,
         IOptions<JwtSettings> jwtSettings)
     {
         _configService = configService;
         _repo = repo;
         _jwtTokenService = jwtTokenService;
+        _workspaceAuthorization = workspaceAuthorization;
         _jwtSettings = jwtSettings.Value;
     }
 
@@ -44,6 +47,8 @@ public class MobileDevicesController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         if (string.IsNullOrWhiteSpace(input.ClientId))
         {
@@ -79,6 +84,8 @@ public class MobileDevicesController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         var code = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
         var expiresAt = DateTime.UtcNow.Add(PairingCodeTtl);
@@ -178,6 +185,8 @@ public class MobileDevicesController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         var tokenType = User.FindFirstValue("token_type");
         var clientId = string.Equals(tokenType, "mobile_device", StringComparison.OrdinalIgnoreCase)
@@ -201,6 +210,8 @@ public class MobileDevicesController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         var devices = await _repo.ListMobileDevicesAsync(wsId, ct);
         return Ok(ApiResponse<List<MobileDeviceDto>>.Ok(devices, GetTraceId()));
@@ -227,6 +238,28 @@ public class MobileDevicesController : BaseController
             expiresAt);
 
         return (updatedDevice, accessToken, refreshToken, expiresAt, refreshTokenExpiresAt);
+    }
+
+    private async Task<IActionResult?> AuthorizeWorkspaceAsync(
+        string workspaceId,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParse(workspaceId, out var id))
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "INVALID_WORKSPACE", "活动工作区 ID 无效", GetTraceId()));
+        }
+        var access = await _workspaceAuthorization.AuthorizeAsync(id, ct);
+        return access switch
+        {
+            WorkspaceAccessResult.Allowed => null,
+            WorkspaceAccessResult.NotFound => NotFound(
+                ApiResponse<object>.FailObject(
+                    "WORKSPACE_NOT_FOUND", "活动工作区不存在", GetTraceId())),
+            _ => StatusCode(StatusCodes.Status403Forbidden,
+                ApiResponse<object>.FailObject(
+                    "WORKSPACE_FORBIDDEN", "无权管理该工作区的移动设备", GetTraceId()))
+        };
     }
 
     private static string GenerateRefreshToken()

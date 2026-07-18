@@ -12,6 +12,7 @@ public class RegisterResponse
     public Guid UserId { get; set; }
     public string Email { get; set; } = string.Empty;
     public string? Nickname { get; set; }
+    public string Role { get; set; } = "user";
     public string Token { get; set; } = string.Empty;
 }
 
@@ -28,6 +29,7 @@ public class LoginResponse
     public string? Nickname { get; set; }
     public string? AvatarUrl { get; set; }
     public string PlanCode { get; set; } = "free";
+    public string Role { get; set; } = "user";
     public string Token { get; set; } = string.Empty;
 }
 
@@ -38,6 +40,7 @@ public class UserInfoResponse
     public string? Nickname { get; set; }
     public string? AvatarUrl { get; set; }
     public string PlanCode { get; set; } = "free";
+    public string Role { get; set; } = "user";
     public string Status { get; set; } = "active";
     public string Timezone { get; set; } = "Asia/Shanghai";
     public DateTime? LastLoginAt { get; set; }

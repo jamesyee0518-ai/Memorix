@@ -93,10 +93,10 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
             INSERT INTO inbox_items (
                 id, workspace_id, user_id, topic_id, input_type, item_type, title, content, content_text,
                 source_url, file_path, status, created_from, origin_device_id, origin_client_version,
-                created_at, updated_at
+                retry_count, created_at, updated_at
             ) VALUES (
                 $id, $ws, $uid, $tid, $it, $it, $title, $content, $content,
-                $url, $fp, 'pending', $cf, $odid, $ocv, $now, $now
+                $url, $fp, 'pending', $cf, $odid, $ocv, 0, $now, $now
             )";
         cmd.Parameters.AddWithValue("$id", id);
         cmd.Parameters.AddWithValue("$ws", input.WorkspaceId);

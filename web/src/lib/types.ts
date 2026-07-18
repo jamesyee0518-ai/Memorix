@@ -33,6 +33,7 @@ export interface User {
   nickname: string;
   avatarUrl?: string;
   planCode: string;
+  role: "platform_admin" | "operator" | "support" | "user";
 }
 
 export interface LoginResponse {
@@ -41,6 +42,7 @@ export interface LoginResponse {
   nickname: string;
   avatarUrl?: string;
   planCode: string;
+  role: "platform_admin" | "operator" | "support" | "user";
   token: string;
 }
 
@@ -54,6 +56,7 @@ export interface RegisterResponse {
   userId: string;
   email: string;
   nickname: string;
+  role: "platform_admin" | "operator" | "support" | "user";
   token: string;
 }
 
@@ -1000,13 +1003,78 @@ export interface CloudInboxStatus {
   cloudWorkspaceId?: string;
   lastPulledAt?: string;
   pendingRemoteCount: number;
+  workerActive: boolean;
+  isRunning: boolean;
+  currentPullStartedAt?: string;
+  nextPullAt?: string;
+  consecutiveFailures: number;
+  retryAt?: string;
+  lastScheduleError?: string;
 }
 
 export interface CloudInboxPullInput {
   cloudApiBaseUrl?: string;
   cloudWorkspaceId?: string;
-  authToken: string;
+  authToken?: string;
+  cloudAccountBindingId?: string;
   retention: CloudInboxRetention;
+}
+
+export interface CloudAccountBinding {
+  id: string;
+  localProfileId: string;
+  cloudUserId: string;
+  cloudApiBaseUrl: string;
+  accountDisplayName?: string;
+  accountEmailMasked?: string;
+  bindingStatus: string;
+  lastAuthenticatedAt?: string;
+}
+
+export interface WorkspaceBinding {
+  id: string;
+  localWorkspaceId: string;
+  cloudAccountBindingId: string;
+  cloudWorkspaceId: string;
+  syncMode: "none" | "inbox_only" | "full_sync" | string;
+  bindingStatus: string;
+  primaryDeviceId?: string;
+  uploadOriginalFiles: boolean;
+  conflictPolicy: string;
+  lastInboxCursor?: string;
+  lastSyncCursor?: string;
+  lastSyncAt?: string;
+}
+
+export interface OAuthStartInput {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  userInfoEndpoint?: string;
+  clientId: string;
+  redirectUri: string;
+  scope?: string;
+  cloudApiBaseUrl: string;
+}
+
+export interface OAuthStartResult {
+  sessionId: string;
+  authorizationUrl: string;
+  expiresAt: string;
+}
+
+export interface OAuthStatus {
+  status: "pending" | "completed" | "failed" | "expired";
+  cloudAccountBindingId?: string;
+  errorMessage?: string;
+}
+
+export interface CreateWorkspaceBindingInput {
+  localWorkspaceId: string;
+  cloudAccountBindingId: string;
+  cloudWorkspaceId: string;
+  syncMode: "none" | "inbox_only" | "full_sync";
+  uploadOriginalFiles?: boolean;
+  conflictPolicy?: "manual" | "local_wins" | "cloud_wins";
 }
 
 export interface CloudInboxPullResult {

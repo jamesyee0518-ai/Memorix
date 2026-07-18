@@ -68,6 +68,12 @@ public interface IAppDbContext
     DbSet<ChunkLocalization> ChunkLocalizations { get; }
     DbSet<ChunkEnrichment> ChunkEnrichments { get; }
     DbSet<MultilingualBatchJob> MultilingualBatchJobs { get; }
+    DbSet<LocalInstallation> LocalInstallations { get; }
+    DbSet<LocalProfile> LocalProfiles { get; }
+    DbSet<DeviceIdentity> DeviceIdentities { get; }
+    DbSet<CloudAccountBinding> CloudAccountBindings { get; }
+    DbSet<WorkspaceBinding> WorkspaceBindings { get; }
+    DbSet<SyncInboxStaging> SyncInboxStaging { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

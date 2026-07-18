@@ -17,33 +17,38 @@ public class ConfigService : IConfigService
     };
 
     private readonly string _configDir;
-    private readonly string _configPath;
+    private readonly ICurrentUserContext _currentUser;
     private readonly ILogger<ConfigService> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public ConfigService(ILogger<ConfigService> logger)
+    public ConfigService(ILogger<ConfigService> logger, ICurrentUserContext currentUser)
     {
         _configDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".knowledge-engine");
-        _configPath = Path.Combine(_configDir, "config.json");
+        _currentUser = currentUser;
         _logger = logger;
     }
+
+    private string ConfigPath => Path.Combine(
+        _configDir,
+        _currentUser.UserId is Guid userId ? $"config-{userId:N}.json" : "config.json");
 
     public async Task<LocalConfig> LoadConfigAsync(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
         try
         {
-            if (!File.Exists(_configPath))
+            var configPath = ConfigPath;
+            if (!File.Exists(configPath))
             {
-                _logger.LogInformation("Config file not found, creating default at {Path}", _configPath);
+                _logger.LogInformation("Config file not found, creating default at {Path}", configPath);
                 var defaultConfig = new LocalConfig();
                 await SaveConfigInternalAsync(defaultConfig, ct);
                 return defaultConfig;
             }
 
-            var json = await File.ReadAllTextAsync(_configPath, ct);
+            var json = await File.ReadAllTextAsync(configPath, ct);
             var config = JsonSerializer.Deserialize<LocalConfig>(json, JsonOptions);
             return config ?? new LocalConfig();
         }
@@ -83,7 +88,8 @@ public class ConfigService : IConfigService
     {
         Directory.CreateDirectory(_configDir);
         var json = JsonSerializer.Serialize(config, JsonOptions);
-        await File.WriteAllTextAsync(_configPath, json, ct);
-        _logger.LogDebug("Config saved to {Path}", _configPath);
+        var configPath = ConfigPath;
+        await File.WriteAllTextAsync(configPath, json, ct);
+        _logger.LogDebug("Config saved to {Path}", configPath);
     }
 }

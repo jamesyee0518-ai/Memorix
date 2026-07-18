@@ -28,3 +28,16 @@ export async function openDesktopDirectory(path: string): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("open_directory", { path });
 }
+
+export async function openExternalUrl(url: string): Promise<void> {
+  if (isDesktopApp()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("open_external_url", { url });
+    return;
+  }
+
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    throw new Error("浏览器阻止了登录窗口，请允许弹出窗口后重试");
+  }
+}

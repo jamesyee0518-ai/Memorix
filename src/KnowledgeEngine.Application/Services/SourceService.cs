@@ -196,7 +196,7 @@ public class SourceService
 
         using var uploadStream = new MemoryStream(bytes);
         var storageProvider = await _fileStorageService.UploadFileInternalAsync(
-            bucket, objectKey, uploadStream, contentType, fileSize, ct);
+            userId.ToString(), bucket, objectKey, uploadStream, contentType, fileSize, ct);
 
         var fileObject = new FileObject
         {

@@ -17,20 +17,24 @@ public class WorkspaceService : IWorkspaceService
 {
     private readonly IAppDbContext _db;
     private readonly IConfigService _configService;
+    private readonly ICurrentUserContext _currentUser;
     private readonly ILogger<WorkspaceService> _logger;
 
     public WorkspaceService(
         IAppDbContext db,
         IConfigService configService,
+        ICurrentUserContext currentUser,
         ILogger<WorkspaceService> logger)
     {
         _db = db;
         _configService = configService;
+        _currentUser = currentUser;
         _logger = logger;
     }
 
     public async Task<WorkspaceDto> CreateWorkspaceAsync(CreateWorkspaceDto input, CancellationToken ct = default)
     {
+        var userId = RequireUserId();
         var now = DateTime.UtcNow;
         var workspace = new Workspace
         {
@@ -47,7 +51,9 @@ public class WorkspaceService : IWorkspaceService
             CloudWorkspaceId = input.CloudWorkspaceId,
             SyncEnabled = input.SyncEnabled,
             InboxEnabled = input.InboxEnabled,
+            SyncMode = ResolveSyncMode(input.SyncMode, input.SyncEnabled, input.InboxEnabled),
             ModelConfig = input.ModelConfig,
+            UserId = userId,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -105,7 +111,9 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task<WorkspaceDto?> GetWorkspaceAsync(Guid id, CancellationToken ct = default)
     {
-        var workspace = await _db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
+        var userId = RequireUserId();
+        var workspace = await _db.Workspaces.FirstOrDefaultAsync(
+            w => w.Id == id && w.UserId == userId, ct);
         return workspace != null ? MapToDto(workspace) : null;
     }
 
@@ -115,13 +123,14 @@ public class WorkspaceService : IWorkspaceService
         var configWorkspaceId = await _configService.GetCurrentWorkspaceIdAsync(ct);
         if (configWorkspaceId != null && Guid.TryParse(configWorkspaceId, out var wsId))
         {
-            var ws = await _db.Workspaces.FirstOrDefaultAsync(w => w.Id == wsId, ct);
+            var ws = await _db.Workspaces.FirstOrDefaultAsync(
+                w => w.Id == wsId && w.UserId == userId, ct);
             if (ws != null) return MapToDto(ws);
         }
 
         // Fallback: get the first workspace for this user, or the first workspace overall
         var workspace = await _db.Workspaces
-            .Where(w => w.UserId == userId || w.UserId == null)
+            .Where(w => w.UserId == userId)
             .OrderBy(w => w.CreatedAt)
             .FirstOrDefaultAsync(ct);
 
@@ -137,7 +146,7 @@ public class WorkspaceService : IWorkspaceService
     public async Task<List<WorkspaceDto>> ListWorkspacesAsync(Guid userId, CancellationToken ct = default)
     {
         var workspaces = await _db.Workspaces
-            .Where(w => w.UserId == userId || w.UserId == null)
+            .Where(w => w.UserId == userId)
             .OrderByDescending(w => w.CreatedAt)
             .ToListAsync(ct);
 
@@ -146,7 +155,9 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task<WorkspaceDto> UpdateWorkspaceAsync(Guid id, UpdateWorkspaceDto input, CancellationToken ct = default)
     {
-        var workspace = await _db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct)
+        var userId = RequireUserId();
+        var workspace = await _db.Workspaces.FirstOrDefaultAsync(
+            w => w.Id == id && w.UserId == userId, ct)
             ?? throw new InvalidOperationException($"Workspace {id} not found");
 
         if (input.Name != null) workspace.Name = input.Name;
@@ -154,6 +165,23 @@ public class WorkspaceService : IWorkspaceService
         if (input.ModelConfig != null) workspace.ModelConfig = input.ModelConfig;
         if (input.SyncEnabled.HasValue) workspace.SyncEnabled = input.SyncEnabled.Value;
         if (input.InboxEnabled.HasValue) workspace.InboxEnabled = input.InboxEnabled.Value;
+        if (input.SyncMode != null)
+        {
+            if (!SyncModes.IsValid(input.SyncMode))
+            {
+                throw new ArgumentException($"Unsupported sync mode: {input.SyncMode}", nameof(input.SyncMode));
+            }
+            workspace.SyncMode = input.SyncMode;
+            workspace.SyncEnabled = input.SyncMode != SyncModes.None;
+            workspace.InboxEnabled = input.SyncMode == SyncModes.InboxOnly || workspace.InboxEnabled;
+        }
+        else if (input.SyncEnabled.HasValue || input.InboxEnabled.HasValue)
+        {
+            workspace.SyncMode = ResolveSyncMode(
+                workspace.SyncMode,
+                workspace.SyncEnabled,
+                workspace.InboxEnabled);
+        }
         if (input.LocalVaultPath != null)
         {
             if (string.IsNullOrWhiteSpace(input.LocalVaultPath))
@@ -191,7 +219,9 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task DeleteWorkspaceAsync(Guid id, CancellationToken ct = default)
     {
-        var workspace = await _db.Workspaces.FirstOrDefaultAsync(w => w.Id == id, ct);
+        var userId = RequireUserId();
+        var workspace = await _db.Workspaces.FirstOrDefaultAsync(
+            w => w.Id == id && w.UserId == userId, ct);
         if (workspace != null)
         {
             _db.Workspaces.Remove(workspace);
@@ -212,6 +242,12 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task SetCurrentWorkspaceAsync(Guid userId, Guid workspaceId, CancellationToken ct = default)
     {
+        var ownsWorkspace = await _db.Workspaces.AnyAsync(
+            w => w.Id == workspaceId && w.UserId == userId, ct);
+        if (!ownsWorkspace)
+        {
+            throw new UnauthorizedAccessException("Workspace access denied.");
+        }
         await _configService.SetCurrentWorkspaceIdAsync(workspaceId.ToString(), ct);
         _logger.LogInformation("Set current workspace to {Id}", workspaceId);
     }
@@ -231,9 +267,23 @@ public class WorkspaceService : IWorkspaceService
         CloudWorkspaceId = w.CloudWorkspaceId,
         SyncEnabled = w.SyncEnabled,
         InboxEnabled = w.InboxEnabled,
+        SyncMode = ResolveSyncMode(w.SyncMode, w.SyncEnabled, w.InboxEnabled),
         ModelConfig = w.ModelConfig,
         UserId = w.UserId,
         CreatedAt = w.CreatedAt,
         UpdatedAt = w.UpdatedAt
     };
+
+    private Guid RequireUserId() => _currentUser.UserId
+        ?? throw new UnauthorizedAccessException("User context is required.");
+
+    private static string ResolveSyncMode(string? syncMode, bool syncEnabled, bool inboxEnabled)
+    {
+        if (SyncModes.IsValid(syncMode) && syncMode != SyncModes.None)
+        {
+            return syncMode!;
+        }
+        if (inboxEnabled) return SyncModes.InboxOnly;
+        return syncEnabled ? SyncModes.Metadata : SyncModes.None;
+    }
 }

@@ -1,15 +1,20 @@
+using Amazon.Runtime;
+using Amazon.S3;
+using Amazon.S3.Model;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Settings;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Minio;
-using Minio.DataModel.Args;
 
 namespace KnowledgeEngine.Infrastructure.Storage;
 
-public class MinioStorageProvider : IFileStorageProvider
+/// <summary>
+/// S3-compatible cloud storage provider. The historical class name is retained
+/// to avoid changing factory and dependency-injection contracts.
+/// </summary>
+public sealed class MinioStorageProvider : IFileStorageProvider, IDisposable
 {
-    private readonly IMinioClient _minioClient;
+    private readonly AmazonS3Client _s3Client;
     private readonly MinioSettings _settings;
     private readonly ILogger<MinioStorageProvider> _logger;
 
@@ -20,88 +25,115 @@ public class MinioStorageProvider : IFileStorageProvider
         _settings = settings.Value;
         _logger = logger;
 
-        var builder = new MinioClient()
-            .WithEndpoint(_settings.Endpoint)
-            .WithCredentials(_settings.AccessKey, _settings.SecretKey);
-
-        if (_settings.UseSsl)
+        var endpoint = _settings.Endpoint.TrimEnd('/');
+        if (!endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            builder = builder.WithSSL();
+            endpoint = $"{(_settings.UseSsl ? "https" : "http")}://{endpoint}";
         }
 
-        _minioClient = builder.Build();
+        var config = new AmazonS3Config
+        {
+            ServiceURL = endpoint,
+            ForcePathStyle = _settings.ForcePathStyle,
+            AuthenticationRegion = _settings.Region
+        };
+
+        _s3Client = new AmazonS3Client(
+            new BasicAWSCredentials(_settings.AccessKey, _settings.SecretKey),
+            config);
     }
 
     public async Task UploadFileAsync(string bucket, string objectKey, Stream stream, string contentType, long? fileSize = null, CancellationToken cancellationToken = default)
     {
         await EnsureBucketExistsAsync(bucket, cancellationToken);
+        var target = ResolveTarget(bucket, objectKey);
 
-        var putArgs = new PutObjectArgs()
-            .WithBucket(bucket)
-            .WithObject(objectKey)
-            .WithStreamData(stream)
-            .WithObjectSize(fileSize ?? stream.Length)
-            .WithContentType(contentType);
+        var request = new PutObjectRequest
+        {
+            BucketName = target.Bucket,
+            Key = target.Key,
+            InputStream = stream,
+            ContentType = contentType,
+            AutoCloseStream = false
+        };
 
-        await _minioClient.PutObjectAsync(putArgs, cancellationToken);
-
+        await _s3Client.PutObjectAsync(request, cancellationToken);
         _logger.LogInformation("File uploaded to {Bucket}/{ObjectKey}", bucket, objectKey);
     }
 
-    public async Task<string> GetPresignedDownloadUrlAsync(string bucket, string objectKey, int expiry, CancellationToken cancellationToken = default)
+    public Task<string> GetPresignedDownloadUrlAsync(string bucket, string objectKey, int expiry, CancellationToken cancellationToken = default)
     {
-        var args = new PresignedGetObjectArgs()
-            .WithBucket(bucket)
-            .WithObject(objectKey)
-            .WithExpiry(expiry);
+        cancellationToken.ThrowIfCancellationRequested();
+        var target = ResolveTarget(bucket, objectKey);
+        var request = new GetPreSignedUrlRequest
+        {
+            BucketName = target.Bucket,
+            Key = target.Key,
+            Expires = DateTime.UtcNow.AddSeconds(expiry),
+            Verb = HttpVerb.GET
+        };
 
-        var url = await _minioClient.PresignedGetObjectAsync(args);
-        return url;
+        return _s3Client.GetPreSignedURLAsync(request);
     }
 
     public async Task EnsureBucketExistsAsync(string bucket, CancellationToken cancellationToken = default)
     {
-        var existsArgs = new BucketExistsArgs().WithBucket(bucket);
-        var exists = await _minioClient.BucketExistsAsync(existsArgs, cancellationToken);
-        if (!exists)
+        if (!_settings.AutoCreateBucket)
         {
-            var makeArgs = new MakeBucketArgs().WithBucket(bucket);
-            await _minioClient.MakeBucketAsync(makeArgs, cancellationToken);
-            _logger.LogInformation("Bucket created: {Bucket}", bucket);
+            return;
+        }
+
+        var targetBucket = ResolveTarget(bucket, string.Empty).Bucket;
+        try
+        {
+            await _s3Client.GetBucketLocationAsync(
+                new GetBucketLocationRequest { BucketName = targetBucket },
+                cancellationToken);
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            await _s3Client.PutBucketAsync(
+                new PutBucketRequest { BucketName = targetBucket },
+                cancellationToken);
+            _logger.LogInformation("Bucket created: {Bucket}", targetBucket);
         }
     }
 
     public async Task<Stream> DownloadFileAsync(string bucket, string objectKey, CancellationToken cancellationToken = default)
     {
-        var ms = new MemoryStream();
-        var getArgs = new GetObjectArgs()
-            .WithBucket(bucket)
-            .WithObject(objectKey)
-            .WithCallbackStream(async (stream, ct) =>
-            {
-                await stream.CopyToAsync(ms, ct);
-                await stream.DisposeAsync();
-            });
-
-        await _minioClient.GetObjectAsync(getArgs, cancellationToken);
-        ms.Position = 0;
+        var target = ResolveTarget(bucket, objectKey);
+        using var response = await _s3Client.GetObjectAsync(target.Bucket, target.Key, cancellationToken);
+        var output = new MemoryStream();
+        await response.ResponseStream.CopyToAsync(output, cancellationToken);
+        output.Position = 0;
 
         _logger.LogInformation("File downloaded from {Bucket}/{ObjectKey}", bucket, objectKey);
-        return ms;
+        return output;
     }
 
     public async Task DeleteFileAsync(string bucket, string objectKey, CancellationToken cancellationToken = default)
     {
-        var args = new RemoveObjectArgs()
-            .WithBucket(bucket)
-            .WithObject(objectKey);
-        await _minioClient.RemoveObjectAsync(args, cancellationToken);
+        var target = ResolveTarget(bucket, objectKey);
+        await _s3Client.DeleteObjectAsync(target.Bucket, target.Key, cancellationToken);
         _logger.LogInformation("File deleted from {Bucket}/{ObjectKey}", bucket, objectKey);
     }
 
-    public Task<string?> GetFilePathAsync(string bucket, string objectKey, CancellationToken cancellationToken = default)
+    public Task<string?> GetFilePathAsync(string bucket, string objectKey, CancellationToken cancellationToken = default) =>
+        Task.FromResult<string?>(null);
+
+    private (string Bucket, string Key) ResolveTarget(string logicalBucket, string objectKey)
     {
-        // Cloud mode: no local file path
-        return Task.FromResult<string?>(null);
+        if (!_settings.UseConfiguredBucket ||
+            string.Equals(logicalBucket, _settings.Bucket, StringComparison.Ordinal))
+        {
+            return (logicalBucket, objectKey);
+        }
+
+        var prefix = logicalBucket.Trim('/');
+        var key = objectKey.TrimStart('/');
+        return (_settings.Bucket, string.IsNullOrEmpty(key) ? prefix : $"{prefix}/{key}");
     }
+
+    public void Dispose() => _s3Client.Dispose();
 }

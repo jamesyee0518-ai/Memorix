@@ -4,6 +4,7 @@ using KnowledgeEngine.Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using KnowledgeEngine.Application.Security;
 
 namespace KnowledgeEngine.Api.Controllers;
 
@@ -103,6 +104,7 @@ public class FeedbackController : BaseController
 
     // ===== GET /api/feedback/all — 管理端查看全部反馈（支持 status/type/severity 筛选 + 分页）=====
     [HttpGet("all")]
+    [Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
     public async Task<IActionResult> GetAllAdmin(
         [FromQuery] string? status,
         [FromQuery] string? type,
@@ -161,6 +163,7 @@ public class FeedbackController : BaseController
 
     // ===== GET /api/feedback/stats — 反馈统计（按 type/severity/status 分组计数）=====
     [HttpGet("stats")]
+    [Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
     public async Task<IActionResult> GetStats(CancellationToken ct)
     {
         var allFeedbacks = await _db.FeedbackItems.ToListAsync(ct);
@@ -185,6 +188,7 @@ public class FeedbackController : BaseController
 
     // ===== PUT /api/feedback/{id} — 更新反馈状态/优先级 =====
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] UpdateFeedbackRequest request, CancellationToken ct)
     {
         var feedback = await _db.FeedbackItems.FirstOrDefaultAsync(f => f.Id == id, ct);

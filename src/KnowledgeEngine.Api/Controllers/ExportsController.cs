@@ -180,8 +180,9 @@ public class ExportsController : BaseController
             return Ok(ApiResponse<object>.Fail("file_not_found", "文件记录不存在", GetTraceId()));
         }
 
-        // 获取当前工作区的存储提供者（区分本地/云端）
-        var storageProvider = await _fileStorageFactory.GetProviderAsync(ct);
+        // 根据文件记录所属工作区选择存储提供者，避免当前配置已切换到其他工作区。
+        var storageProvider = await _fileStorageFactory.GetProviderForWorkspaceAsync(
+            file.WorkspaceId.ToString(), ct);
 
         // 获取本地文件路径（云端模式返回 null）
         var filePath = await storageProvider.GetFilePathAsync(file.Bucket, file.ObjectKey, ct);

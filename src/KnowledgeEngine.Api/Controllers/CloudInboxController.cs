@@ -1,6 +1,7 @@
 using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Services;
+using KnowledgeEngine.Infrastructure.Runtime;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,21 +12,29 @@ namespace KnowledgeEngine.Api.Controllers;
 [Authorize]
 public class CloudInboxController : BaseController
 {
+    private const string PullStrategySetting = "cloud_inbox_pull_strategy";
+    private const string RetentionSetting = "cloud_inbox_retention";
     private readonly IWorkspaceService _workspaceService;
     private readonly IConfigService _configService;
     private readonly IKnowledgeRepository _repo;
     private readonly CloudInboxSyncService _syncService;
+    private readonly IBindingService _bindingService;
+    private readonly CloudInboxScheduleMonitor _scheduleMonitor;
 
     public CloudInboxController(
         IWorkspaceService workspaceService,
         IConfigService configService,
         IKnowledgeRepository repo,
-        CloudInboxSyncService syncService)
+        CloudInboxSyncService syncService,
+        IBindingService bindingService,
+        CloudInboxScheduleMonitor scheduleMonitor)
     {
         _workspaceService = workspaceService;
         _configService = configService;
         _repo = repo;
         _syncService = syncService;
+        _bindingService = bindingService;
+        _scheduleMonitor = scheduleMonitor;
     }
 
     [HttpGet("settings")]
@@ -37,7 +46,8 @@ public class CloudInboxController : BaseController
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
 
-        return Ok(ApiResponse<CloudInboxSettingsDto>.Ok(MapSettings(workspace), GetTraceId()));
+        return Ok(ApiResponse<CloudInboxSettingsDto>.Ok(
+            await MapSettingsAsync(workspace, ct), GetTraceId()));
     }
 
     [HttpPut("settings")]
@@ -56,8 +66,15 @@ public class CloudInboxController : BaseController
             CloudApiBaseUrl = input.CloudApiBaseUrl?.Trim(),
             CloudWorkspaceId = input.CloudWorkspaceId?.Trim()
         }, ct);
+        var pullStrategy = NormalizePullStrategy(input.PullStrategy);
+        var retention = NormalizeRetention(input.Retention);
+        await _repo.SetSettingAsync(
+            workspace.Id.ToString(), PullStrategySetting, pullStrategy, ct);
+        await _repo.SetSettingAsync(
+            workspace.Id.ToString(), RetentionSetting, retention, ct);
 
-        return Ok(ApiResponse<CloudInboxSettingsDto>.Ok(MapSettings(updated), GetTraceId()));
+        return Ok(ApiResponse<CloudInboxSettingsDto>.Ok(
+            await MapSettingsAsync(updated, ct), GetTraceId()));
     }
 
     [HttpGet("status")]
@@ -70,6 +87,7 @@ public class CloudInboxController : BaseController
         }
 
         var latestLog = (await _repo.ListCloudInboxSyncLogsAsync(workspace.Id.ToString(), 1, ct)).FirstOrDefault();
+        var schedule = _scheduleMonitor.Get(workspace.Id);
 
         return Ok(ApiResponse<CloudInboxStatusDto>.Ok(new CloudInboxStatusDto
         {
@@ -79,8 +97,42 @@ public class CloudInboxController : BaseController
                 !string.IsNullOrWhiteSpace(workspace.CloudWorkspaceId),
             CloudApiBaseUrl = workspace.CloudApiBaseUrl,
             CloudWorkspaceId = workspace.CloudWorkspaceId,
-            LastPulledAt = latestLog?.FinishedAt
+            LastPulledAt = latestLog?.FinishedAt,
+            WorkerActive = schedule.WorkerActive,
+            IsRunning = schedule.IsRunning,
+            CurrentPullStartedAt = schedule.StartedAt,
+            NextPullAt = schedule.NextPullAt,
+            ConsecutiveFailures = schedule.ConsecutiveFailures,
+            RetryAt = schedule.RetryAt,
+            LastScheduleError = schedule.LastError
         }, GetTraceId()));
+    }
+
+    [HttpPost("schedule/retry")]
+    public async Task<IActionResult> Retry(CancellationToken ct)
+    {
+        var workspace = await GetCurrentWorkspaceAsync(ct);
+        if (workspace == null)
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
+        }
+        _scheduleMonitor.RequestRetry(workspace.Id);
+        return Ok(ApiResponse<object>.Ok(new { queued = true }, GetTraceId()));
+    }
+
+    [HttpPost("schedule/cancel")]
+    public async Task<IActionResult> Cancel(CancellationToken ct)
+    {
+        var workspace = await GetCurrentWorkspaceAsync(ct);
+        if (workspace == null)
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
+        }
+        return Ok(ApiResponse<object>.Ok(
+            new { cancelled = _scheduleMonitor.Cancel(workspace.Id) },
+            GetTraceId()));
     }
 
     [HttpGet("logs")]
@@ -119,9 +171,18 @@ public class CloudInboxController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("CLOUD_INBOX_NOT_CONFIGURED", "请先配置云端 API 地址和云端工作区 ID", GetTraceId()));
         }
-        if (string.IsNullOrWhiteSpace(input.AuthToken))
+        var authToken = input.AuthToken;
+        if (string.IsNullOrWhiteSpace(authToken) && input.CloudAccountBindingId.HasValue)
         {
-            return BadRequest(ApiResponse<object>.FailObject("NO_AUTH_TOKEN", "请提供云端访问 Token", GetTraceId()));
+            authToken = await _bindingService.GetAccessTokenAsync(
+                input.CloudAccountBindingId.Value, ct);
+        }
+        if (string.IsNullOrWhiteSpace(authToken))
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "NO_AUTH_TOKEN",
+                "请先连接云端账号，或提供云端访问 Token",
+                GetTraceId()));
         }
 
         var startedAt = DateTime.UtcNow;
@@ -131,7 +192,8 @@ public class CloudInboxController : BaseController
                 workspace.Id.ToString(),
                 cloudApiBaseUrl,
                 cloudWorkspaceId,
-                input.AuthToken,
+                authToken,
+                input.Retention,
                 ct);
 
             var pulledAt = DateTime.UtcNow;
@@ -187,15 +249,25 @@ public class CloudInboxController : BaseController
         return await _workspaceService.GetWorkspaceAsync(workspaceId, ct);
     }
 
-    private static CloudInboxSettingsDto MapSettings(WorkspaceDto workspace) => new()
-    {
-        Enabled = workspace.InboxEnabled,
-        PullStrategy = "manual",
-        Retention = "keep",
-        CloudApiBaseUrl = workspace.CloudApiBaseUrl,
-        CloudWorkspaceId = workspace.CloudWorkspaceId,
-        SyncEnabled = workspace.SyncEnabled
-    };
+    private async Task<CloudInboxSettingsDto> MapSettingsAsync(
+        WorkspaceDto workspace,
+        CancellationToken ct) => new()
+        {
+            Enabled = workspace.InboxEnabled,
+            PullStrategy = NormalizePullStrategy(await _repo.GetSettingAsync(
+                workspace.Id.ToString(), PullStrategySetting, ct)),
+            Retention = NormalizeRetention(await _repo.GetSettingAsync(
+                workspace.Id.ToString(), RetentionSetting, ct)),
+            CloudApiBaseUrl = workspace.CloudApiBaseUrl,
+            CloudWorkspaceId = workspace.CloudWorkspaceId,
+            SyncEnabled = workspace.SyncEnabled
+        };
+
+    private static string NormalizePullStrategy(string? value) =>
+        value is "manual" or "onStartup" or "scheduled" ? value : "manual";
+
+    private static string NormalizeRetention(string? value) =>
+        value is "keep" or "deleteOriginal" or "deleteAll" ? value : "keep";
 }
 
 public class CloudInboxSettingsDto
@@ -225,13 +297,21 @@ public class CloudInboxStatusDto
     public string? CloudWorkspaceId { get; set; }
     public DateTime? LastPulledAt { get; set; }
     public int PendingRemoteCount { get; set; }
+    public bool WorkerActive { get; set; }
+    public bool IsRunning { get; set; }
+    public DateTime? CurrentPullStartedAt { get; set; }
+    public DateTime? NextPullAt { get; set; }
+    public int ConsecutiveFailures { get; set; }
+    public DateTime? RetryAt { get; set; }
+    public string? LastScheduleError { get; set; }
 }
 
 public class CloudInboxPullDto
 {
     public string? CloudApiBaseUrl { get; set; }
     public string? CloudWorkspaceId { get; set; }
-    public string AuthToken { get; set; } = string.Empty;
+    public string? AuthToken { get; set; }
+    public Guid? CloudAccountBindingId { get; set; }
     public string Retention { get; set; } = "keep";
 }
 

@@ -23,15 +23,18 @@ public class MobileCaptureController : BaseController
     private readonly ImportService _importService;
     private readonly IConfigService _configService;
     private readonly IKnowledgeRepository _repo;
+    private readonly IWorkspaceAuthorizationService _workspaceAuthorization;
 
     public MobileCaptureController(
         ImportService importService,
         IConfigService configService,
-        IKnowledgeRepository repo)
+        IKnowledgeRepository repo,
+        IWorkspaceAuthorizationService workspaceAuthorization)
     {
         _importService = importService;
         _configService = configService;
         _repo = repo;
+        _workspaceAuthorization = workspaceAuthorization;
     }
 
     /// <summary>
@@ -45,6 +48,8 @@ public class MobileCaptureController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         var resolvedClient = await ResolveMobileClientIdAsync(wsId, clientId, ct);
         if (resolvedClient.Error != null)
@@ -73,6 +78,8 @@ public class MobileCaptureController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         if (string.IsNullOrWhiteSpace(input.ContentText))
         {
@@ -109,6 +116,8 @@ public class MobileCaptureController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         if (string.IsNullOrWhiteSpace(input.SourceUrl))
         {
@@ -147,6 +156,8 @@ public class MobileCaptureController : BaseController
         {
             return BadRequest(ApiResponse<object>.FailObject("NO_WORKSPACE", "未找到活动工作区", GetTraceId()));
         }
+        var accessError = await AuthorizeWorkspaceAsync(wsId, ct);
+        if (accessError != null) return accessError;
 
         if (input.File == null || input.File.Length == 0)
         {
@@ -213,6 +224,28 @@ public class MobileCaptureController : BaseController
         }
 
         return (requestedClientId.Trim(), null);
+    }
+
+    private async Task<IActionResult?> AuthorizeWorkspaceAsync(
+        string workspaceId,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParse(workspaceId, out var id))
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "INVALID_WORKSPACE", "活动工作区 ID 无效", GetTraceId()));
+        }
+        var access = await _workspaceAuthorization.AuthorizeAsync(id, ct);
+        return access switch
+        {
+            WorkspaceAccessResult.Allowed => null,
+            WorkspaceAccessResult.NotFound => NotFound(
+                ApiResponse<object>.FailObject(
+                    "WORKSPACE_NOT_FOUND", "活动工作区不存在", GetTraceId())),
+            _ => StatusCode(StatusCodes.Status403Forbidden,
+                ApiResponse<object>.FailObject(
+                    "WORKSPACE_FORBIDDEN", "无权向该工作区采集资料", GetTraceId()))
+        };
     }
 }
 

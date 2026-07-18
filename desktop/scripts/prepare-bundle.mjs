@@ -114,6 +114,9 @@ const publishArgs = [
   process.env.MEMORIX_DESKTOP_SELF_CONTAINED ?? "true",
   "-r",
   runtimeId(),
+  "-m:1",
+  "-p:UseSharedCompilation=false",
+  "-nodeReuse:false",
 ];
 if (process.env.MEMORIX_DESKTOP_NO_RESTORE === "true") {
   publishArgs.push("--no-restore");

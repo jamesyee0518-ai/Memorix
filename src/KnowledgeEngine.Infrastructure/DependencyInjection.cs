@@ -52,7 +52,8 @@ public static class DependencyInjection
         {
             var connectionString = configuration.GetConnectionString("DefaultConnection");
             services.AddDbContext<AppDbContext>(options =>
-                options.UseNpgsql(connectionString));
+                options.UseNpgsql(connectionString)
+                    .UseSnakeCaseNamingConvention());
         }
 
         services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
@@ -61,6 +62,13 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddScoped<ICurrentUserContext, CurrentUserContext>();
+        services.AddScoped<IWorkspaceAuthorizationService, WorkspaceAuthorizationService>();
+        services.AddSingleton<ICredentialStore, PlatformCredentialStore>();
+        services.AddScoped<ILocalIdentityService, LocalIdentityService>();
+        services.AddScoped<IBindingService, BindingService>();
+        services.AddScoped<IOAuthBindingService, OAuthBindingService>();
+        services.AddSingleton<CloudInboxScheduleMonitor>();
+        services.AddHostedService<CloudInboxPullWorker>();
         services.AddHttpContextAccessor();
 
         // Storage
@@ -196,7 +204,7 @@ public static class DependencyInjection
         // ===== Dual-mode Foundation Services =====
 
         // Config Service (local config file)
-        services.AddSingleton<IConfigService, ConfigService>();
+        services.AddScoped<IConfigService, ConfigService>();
 
         // Workspace Service
         services.AddScoped<IWorkspaceService, WorkspaceService>();

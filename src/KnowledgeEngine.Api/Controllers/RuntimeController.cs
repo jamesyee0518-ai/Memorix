@@ -2,6 +2,7 @@ using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using KnowledgeEngine.Application.Security;
 
 namespace KnowledgeEngine.Api.Controllers;
 
@@ -24,7 +25,7 @@ public class RuntimeController : BaseController
     /// Check the health of all runtime components.
     /// </summary>
     [HttpGet("health")]
-    [AllowAnonymous]
+    [Authorize(Policy = AuthorizationPolicies.PlatformAdmin)]
     public async Task<IActionResult> CheckHealth(CancellationToken ct)
     {
         var status = await _healthService.CheckHealthAsync(ct);
@@ -51,7 +52,7 @@ public class RuntimeController : BaseController
     /// Detect local Ollama and LM Studio services from the local API process.
     /// </summary>
     [HttpGet("local-models")]
-    [AllowAnonymous]
+    [Authorize(Policy = AuthorizationPolicies.PlatformAdmin)]
     public async Task<IActionResult> DetectLocalModels(CancellationToken ct)
     {
         var status = await _healthService.DetectLocalModelsAsync(ct);

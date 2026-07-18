@@ -14,6 +14,7 @@ public static class Mapper
             Nickname = user.Nickname,
             AvatarUrl = user.AvatarUrl,
             PlanCode = user.PlanCode,
+            Role = user.Role,
             Status = user.Status,
             Timezone = user.Timezone,
             LastLoginAt = user.LastLoginAt,

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Claims;
+using KnowledgeEngine.Application.Security;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
@@ -33,6 +34,8 @@ public class LocalAuthenticationHandler : AuthenticationHandler<AuthenticationSc
             new Claim("email", LocalUserConstants.Email),
             new Claim(ClaimTypes.Email, LocalUserConstants.Email),
             new Claim(ClaimTypes.Name, LocalUserConstants.Nickname),
+            new Claim(ClaimTypes.Role, PlatformRoles.PlatformAdmin),
+            new Claim("role", PlatformRoles.PlatformAdmin),
         };
 
         var identity = new ClaimsIdentity(claims, SchemeName);

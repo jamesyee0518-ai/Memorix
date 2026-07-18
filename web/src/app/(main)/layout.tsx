@@ -33,6 +33,7 @@ import {
   PanelLeftOpen,
   ChevronsUpDown,
   Languages,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
@@ -64,6 +65,7 @@ const navItems = [
   { href: "/exports", label: "导出", icon: FileDown },
   { href: "/entities", label: "实体", icon: Boxes },
   { href: "/tags", label: "标签", icon: Tag },
+  { href: "/operations", label: "运营中心", icon: ShieldCheck, operatorOnly: true },
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
@@ -234,6 +236,8 @@ export default function AppLayout({
   const displayEmail =
     user?.email ?? (isLocalAnonymous ? "local@knowledge-engine.local" : "");
   const initials = displayName.charAt(0).toUpperCase() || "U";
+  const canOperate = user?.role === "platform_admin" || user?.role === "operator";
+  const visibleNavItems = navItems.filter((item) => !item.operatorOnly || (canOperate && !isDesktop));
 
   if (isDesktop) {
     return (
@@ -260,7 +264,7 @@ export default function AppLayout({
           </div>
 
           <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-            {navItems.filter((item) => item.href !== "/settings").map((item) => {
+            {visibleNavItems.filter((item) => item.href !== "/settings").map((item) => {
               const Icon = item.icon;
               const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
               return <Link key={item.href} href={item.href} title={sidebarCollapsed ? item.label : undefined}
@@ -394,7 +398,7 @@ export default function AppLayout({
 
         {/* 导航 */}
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
             const isSettings = item.href === "/settings";
