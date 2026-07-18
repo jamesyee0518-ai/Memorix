@@ -55,6 +55,7 @@ public class AuthService
             Nickname = string.IsNullOrWhiteSpace(request.Nickname) ? email.Split('@')[0] : request.Nickname.Trim(),
             PasswordHash = _passwordHasher.HashPassword(request.Password),
             PlanCode = "free",
+            Role = "user",
             Status = "active",
             Timezone = "Asia/Shanghai",
             CreatedAt = now,
@@ -64,12 +65,13 @@ public class AuthService
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
 
-        var token = _jwtTokenService.GenerateToken(user.Id, user.Email);
+        var token = _jwtTokenService.GenerateToken(user.Id, user.Email, user.Role);
         var response = new RegisterResponse
         {
             UserId = user.Id,
             Email = user.Email,
             Nickname = user.Nickname,
+            Role = user.Role,
             Token = token
         };
 
@@ -107,7 +109,7 @@ public class AuthService
         user.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
-        var token = _jwtTokenService.GenerateToken(user.Id, user.Email);
+        var token = _jwtTokenService.GenerateToken(user.Id, user.Email, user.Role);
         var response = new LoginResponse
         {
             UserId = user.Id,
@@ -115,6 +117,7 @@ public class AuthService
             Nickname = user.Nickname,
             AvatarUrl = user.AvatarUrl,
             PlanCode = user.PlanCode,
+            Role = user.Role,
             Token = token
         };
 

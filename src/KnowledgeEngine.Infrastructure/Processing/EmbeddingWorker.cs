@@ -336,7 +336,8 @@ public class EmbeddingWorker : BackgroundService
 
         // Look up existing record(s) for this chunk + provider + model
         var existing = await db.ChunkEmbeddings
-            .Where(ce => ce.ChunkId == chunk.Id && ce.Provider == provider && ce.Model == model)
+            .Where(ce => ce.ChunkId == chunk.Id && ce.Provider == provider && ce.Model == model
+                && ce.EmbeddingType == "original")
             .ToListAsync(ct);
 
         if (existing.Count > 0)
@@ -349,6 +350,9 @@ public class EmbeddingWorker : BackgroundService
             primary.Dimension = dimension;
             primary.EmbeddingJson = embeddingJson;
             primary.ChunkContentHash = chunk.ContentHash;
+            primary.SourceContentHash = chunk.ContentHash;
+            primary.LanguageCode = chunk.DetectedLanguage ?? "und";
+            primary.EmbeddingType = "original";
             primary.Status = "done";
             primary.ErrorMessage = null;
             primary.RetryCount = 0;
@@ -371,6 +375,9 @@ public class EmbeddingWorker : BackgroundService
                 Dimension = dimension,
                 EmbeddingJson = embeddingJson,
                 ChunkContentHash = chunk.ContentHash,
+                SourceContentHash = chunk.ContentHash,
+                LanguageCode = chunk.DetectedLanguage ?? "und",
+                EmbeddingType = "original",
                 Status = "done",
                 RetryCount = 0,
                 CreatedAt = now,

@@ -20,6 +20,7 @@ public class LocalConfig
     public string CurrentWorkspaceId { get; set; } = string.Empty;
     public List<LocalWorkspaceEntry> Workspaces { get; set; } = new();
     public string AppVersion { get; set; } = "0.1.0";
+    public Dictionary<string, string> Settings { get; set; } = new();
 }
 
 public class LocalWorkspaceEntry

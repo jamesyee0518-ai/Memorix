@@ -93,10 +93,10 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
             INSERT INTO inbox_items (
                 id, workspace_id, user_id, topic_id, input_type, item_type, title, content, content_text,
                 source_url, file_path, status, created_from, origin_device_id, origin_client_version,
-                created_at, updated_at
+                retry_count, created_at, updated_at
             ) VALUES (
                 $id, $ws, $uid, $tid, $it, $it, $title, $content, $content,
-                $url, $fp, 'pending', $cf, $odid, $ocv, $now, $now
+                $url, $fp, 'pending', $cf, $odid, $ocv, 0, $now, $now
             )";
         cmd.Parameters.AddWithValue("$id", id);
         cmd.Parameters.AddWithValue("$ws", input.WorkspaceId);
@@ -1255,8 +1255,8 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         var cmd = conn.CreateCommand();
-        cmd.CommandText = @"INSERT INTO documents (id, workspace_id, topic_id, source_id, title, content_markdown, content_text, summary, ai_status, created_at, updated_at)
-            VALUES ($id, $ws, $tid, $sid, $title, $md, $txt, $sum, 'pending', $now, $now)";
+        cmd.CommandText = @"INSERT INTO documents (id, workspace_id, topic_id, source_id, title, title_original, content_markdown, content_text, summary, ai_status, created_at, updated_at)
+            VALUES ($id, $ws, $tid, $sid, $title, $title, $md, $txt, $sum, 'pending', $now, $now)";
         cmd.Parameters.AddWithValue("$id", id);
         cmd.Parameters.AddWithValue("$ws", input.WorkspaceId);
         cmd.Parameters.AddWithValue("$tid", (object?)input.TopicId ?? DBNull.Value);
@@ -1288,7 +1288,7 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, workspace_id, topic_id, source_id, title, content_markdown, content_text, summary, ai_status, created_at, updated_at FROM documents WHERE id = $id";
+        cmd.CommandText = "SELECT id, workspace_id, topic_id, source_id, title, content_markdown, content_text, summary, ai_status, created_at, updated_at, title_original, title_zh, primary_language, language_distribution, is_multilingual, localization_strategy, localization_level, language_detect_status, localization_status, content_hash FROM documents WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", id);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
@@ -1300,7 +1300,7 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, workspace_id, topic_id, source_id, title, content_markdown, content_text, summary, ai_status, created_at, updated_at FROM documents WHERE workspace_id = $ws";
+        cmd.CommandText = "SELECT id, workspace_id, topic_id, source_id, title, content_markdown, content_text, summary, ai_status, created_at, updated_at, title_original, title_zh, primary_language, language_distribution, is_multilingual, localization_strategy, localization_level, language_detect_status, localization_status, content_hash FROM documents WHERE workspace_id = $ws";
         cmd.Parameters.AddWithValue("$ws", workspaceId);
         if (!string.IsNullOrEmpty(topicId))
         {
@@ -1334,14 +1334,28 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         {
             var insCmd = conn.CreateCommand();
             insCmd.Transaction = (SqliteTransaction)tx;
-            insCmd.CommandText = @"INSERT INTO document_chunks (id, document_id, chunk_index, chunk_title, content, token_count, char_count)
-                VALUES ($id, $did, $idx, $title, $content, $tok, $char)";
+            insCmd.CommandText = @"INSERT INTO document_chunks
+                (id, document_id, chunk_index, chunk_title, content, content_original, content_normalized,
+                 detected_language, language_confidence, language_distribution, content_type, processing_route,
+                 localization_required, chunk_group_id, parent_chunk_id, token_count, char_count)
+                VALUES ($id, $did, $idx, $title, $content, $original, $normalized, $language, $confidence,
+                        $distribution, $contentType, $route, $localizationRequired, $groupId, $parentId, $tok, $char)";
             var chunkId = string.IsNullOrEmpty(chunk.Id) ? Guid.NewGuid().ToString() : chunk.Id;
             insCmd.Parameters.AddWithValue("$id", chunkId);
             insCmd.Parameters.AddWithValue("$did", documentId);
             insCmd.Parameters.AddWithValue("$idx", chunk.ChunkIndex);
             insCmd.Parameters.AddWithValue("$title", (object?)chunk.ChunkTitle ?? DBNull.Value);
             insCmd.Parameters.AddWithValue("$content", chunk.Content ?? string.Empty);
+            insCmd.Parameters.AddWithValue("$original", string.IsNullOrEmpty(chunk.ContentOriginal) ? chunk.Content ?? string.Empty : chunk.ContentOriginal);
+            insCmd.Parameters.AddWithValue("$normalized", (object?)chunk.ContentNormalized ?? DBNull.Value);
+            insCmd.Parameters.AddWithValue("$language", (object?)chunk.DetectedLanguage ?? DBNull.Value);
+            insCmd.Parameters.AddWithValue("$confidence", (object?)chunk.LanguageConfidence ?? DBNull.Value);
+            insCmd.Parameters.AddWithValue("$distribution", (object?)chunk.LanguageDistribution ?? DBNull.Value);
+            insCmd.Parameters.AddWithValue("$contentType", chunk.ContentType);
+            insCmd.Parameters.AddWithValue("$route", chunk.ProcessingRoute);
+            insCmd.Parameters.AddWithValue("$localizationRequired", chunk.LocalizationRequired ? 1 : 0);
+            insCmd.Parameters.AddWithValue("$groupId", (object?)chunk.ChunkGroupId ?? DBNull.Value);
+            insCmd.Parameters.AddWithValue("$parentId", (object?)chunk.ParentChunkId ?? DBNull.Value);
             insCmd.Parameters.AddWithValue("$tok", chunk.TokenCount);
             insCmd.Parameters.AddWithValue("$char", chunk.CharCount);
             await insCmd.ExecuteNonQueryAsync(ct);
@@ -1879,7 +1893,9 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT id, document_id, chunk_index, chunk_title, content, token_count, char_count,
-                   chunk_uid, heading_path, section_level, content_hash, prev_chunk_id, next_chunk_id, index_status
+                   chunk_uid, heading_path, section_level, content_hash, prev_chunk_id, next_chunk_id, index_status,
+                   content_original, content_normalized, detected_language, language_confidence, language_distribution,
+                   content_type, processing_route, localization_required, chunk_group_id, parent_chunk_id
             FROM document_chunks WHERE document_id = $did ORDER BY chunk_index ASC";
         cmd.Parameters.AddWithValue("$did", documentId);
         var results = new List<ChunkDto>();
@@ -1895,7 +1911,9 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT id, document_id, chunk_index, chunk_title, content, token_count, char_count,
-                   chunk_uid, heading_path, section_level, content_hash, prev_chunk_id, next_chunk_id, index_status
+                   chunk_uid, heading_path, section_level, content_hash, prev_chunk_id, next_chunk_id, index_status,
+                   content_original, content_normalized, detected_language, language_confidence, language_distribution,
+                   content_type, processing_route, localization_required, chunk_group_id, parent_chunk_id
             FROM document_chunks WHERE id = $id";
         cmd.Parameters.AddWithValue("$id", chunkId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -2243,7 +2261,17 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         Summary = r.IsDBNull(7) ? null : r.GetString(7),
         AiStatus = r.GetString(8),
         CreatedAt = DateTime.Parse(r.GetString(9)),
-        UpdatedAt = DateTime.Parse(r.GetString(10))
+        UpdatedAt = DateTime.Parse(r.GetString(10)),
+        TitleOriginal = r.IsDBNull(11) ? null : r.GetString(11),
+        TitleZh = r.IsDBNull(12) ? null : r.GetString(12),
+        PrimaryLanguage = r.IsDBNull(13) ? null : r.GetString(13),
+        LanguageDistribution = r.IsDBNull(14) ? null : r.GetString(14),
+        IsMultilingual = !r.IsDBNull(15) && r.GetInt32(15) != 0,
+        LocalizationStrategy = r.IsDBNull(16) ? "none" : r.GetString(16),
+        LocalizationLevel = r.IsDBNull(17) ? "L1" : r.GetString(17),
+        LanguageDetectStatus = r.IsDBNull(18) ? "pending" : r.GetString(18),
+        LocalizationStatus = r.IsDBNull(19) ? "pending" : r.GetString(19),
+        ContentHash = r.IsDBNull(20) ? null : r.GetString(20)
     };
 
     /// <summary>
@@ -2547,6 +2575,16 @@ public class LocalKnowledgeRepository : IKnowledgeRepository
         ContentHash = r.IsDBNull(10) ? null : r.GetString(10),
         PrevChunkId = r.IsDBNull(11) ? null : r.GetString(11),
         NextChunkId = r.IsDBNull(12) ? null : r.GetString(12),
-        IndexStatus = r.IsDBNull(13) ? "pending" : r.GetString(13)
+        IndexStatus = r.IsDBNull(13) ? "pending" : r.GetString(13),
+        ContentOriginal = r.IsDBNull(14) ? (r.IsDBNull(4) ? "" : r.GetString(4)) : r.GetString(14),
+        ContentNormalized = r.IsDBNull(15) ? null : r.GetString(15),
+        DetectedLanguage = r.IsDBNull(16) ? null : r.GetString(16),
+        LanguageConfidence = r.IsDBNull(17) ? null : r.GetDouble(17),
+        LanguageDistribution = r.IsDBNull(18) ? null : r.GetString(18),
+        ContentType = r.IsDBNull(19) ? "paragraph" : r.GetString(19),
+        ProcessingRoute = r.IsDBNull(20) ? "review" : r.GetString(20),
+        LocalizationRequired = !r.IsDBNull(21) && r.GetInt32(21) != 0,
+        ChunkGroupId = r.IsDBNull(22) ? null : r.GetString(22),
+        ParentChunkId = r.IsDBNull(23) ? null : r.GetString(23)
     };
 }

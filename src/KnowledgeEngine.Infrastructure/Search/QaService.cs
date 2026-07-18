@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Mapping;
@@ -21,12 +22,19 @@ public class QaService : IQaService
     private readonly ISearchService _searchService;
     private readonly ILlmService _llmService;
     private readonly LlmSettings _llmSettings;
+    private readonly IRerankerService _reranker;
     private readonly ILogger<QaService> _logger;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
+    private static readonly JsonSerializerOptions LegacyJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
     };
 
     public QaService(
@@ -34,12 +42,14 @@ public class QaService : IQaService
         ISearchService searchService,
         ILlmService llmService,
         IOptions<LlmSettings> llmSettings,
+        IRerankerService reranker,
         ILogger<QaService> logger)
     {
         _db = db;
         _searchService = searchService;
         _llmService = llmService;
         _llmSettings = llmSettings.Value;
+        _reranker = reranker;
         _logger = logger;
     }
 
@@ -113,12 +123,21 @@ public class QaService : IQaService
             _db.QaMessages.Add(userMessage);
             await _db.SaveChangesAsync(ct);
 
-            // Step 1.5: Query rewriting (rule-based)
-            var rewrittenQuery = RewriteQuery(request.Query);
+            // Step 1.5: Complete follow-up questions from recent history, then normalize.
+            var recentHistory = await _db.QaMessages
+                .Where(m => m.SessionId == session.Id && m.Id != userMessage.Id)
+                .OrderByDescending(m => m.CreatedAt)
+                .Take(6)
+                .OrderBy(m => m.CreatedAt)
+                .ToListAsync(ct);
+            var completedQuery = CompleteQueryFromHistory(request.Query, recentHistory);
+            var rewrittenQuery = RewriteQuery(completedQuery);
             if (rewrittenQuery != request.Query)
             {
                 _logger.LogInformation("Query rewritten: {Original} → {Rewritten}", request.Query, rewrittenQuery);
             }
+
+            var embeddingDiagnostics = await GetEmbeddingDiagnosticsAsync(userId, topicId, ct);
 
             // Step 2: Retrieve relevant chunks via hybrid search
             var searchRequest = new SearchRequest
@@ -136,7 +155,7 @@ public class QaService : IQaService
             if (searchResults.Count == 0)
             {
                 sw.Stop();
-                var noResultAnswer = "抱歉，我在当前知识库中没有找到与您问题相关的资料。请尝试添加更多资料或调整问题后重试。";
+                var noResultAnswer = BuildNoResultAnswer(embeddingDiagnostics);
 
                 var noResultMessage = new QaMessage
                 {
@@ -152,7 +171,9 @@ public class QaService : IQaService
                         search_type = "hybrid",
                         retrieved_count = 0,
                         used_count = 0,
-                        top_score = 0.0
+                        top_score = 0.0,
+                        completed_query = completedQuery,
+                        embedding_diagnostics = embeddingDiagnostics
                     }),
                     Model = _llmSettings.Model,
                     LatencyMs = (int)sw.ElapsedMilliseconds,
@@ -176,17 +197,18 @@ public class QaService : IQaService
                     },
                     Model = _llmSettings.Model,
                     LatencyMs = (int)sw.ElapsedMilliseconds,
-                    Confidence = 0.0
+                    Confidence = 0.0,
+                    DebugInfo = BuildDebugInfo(topicId, request.Query, completedQuery, searchResults, null, embeddingDiagnostics, new List<string>())
                 });
             }
 
-            // Check top similarity threshold
-            var topScore = searchResults.First().Score;
-            if (topScore < 0.25)
+            // Gate with raw evidence quality, not the normalized RRF rank score.
+            var topScore = searchResults.Max(CalculateEvidenceRelevance);
+            if (topScore < 0.20)
             {
                 sw.Stop();
-                var lowRelevanceAnswer = "我找到了一些资料，但它们与您的问题相关性较低（最高相关度低于0.25）。以下是我能提供的信息，请谨慎参考：\n\n" +
-                    string.Join("\n\n", searchResults.Take(3).Select(r => $"- {r.Title}: {r.Snippet}"));
+                var lowRelevanceAnswer = "我找到了一些候选资料，但原始向量相似度、分词命中率和多通道证据均不足，暂不据此生成结论。以下内容仅供核查：\n\n" +
+                    string.Join("\n\n", searchResults.Take(3).Select((r, index) => $"- [{index + 1}] {r.Title}: {r.Snippet}"));
 
                 var lowRelevanceCitations = BuildCitations(searchResults.Take(3).ToList());
                 var lowRelevanceMessage = new QaMessage
@@ -203,7 +225,10 @@ public class QaService : IQaService
                         search_type = "hybrid",
                         retrieved_count = searchResults.Count,
                         used_count = 3,
-                        top_score = topScore
+                        top_score = topScore,
+                        rrf_score = searchResults.First().Score,
+                        completed_query = completedQuery,
+                        embedding_diagnostics = embeddingDiagnostics
                     }),
                     Model = _llmSettings.Model,
                     LatencyMs = (int)sw.ElapsedMilliseconds,
@@ -227,12 +252,13 @@ public class QaService : IQaService
                     },
                     Model = _llmSettings.Model,
                     LatencyMs = (int)sw.ElapsedMilliseconds,
-                    Confidence = CalculateConfidence(topScore, lowRelevanceCitations.Count, 3)
+                    Confidence = CalculateConfidence(topScore, lowRelevanceCitations.Count, 3),
+                    DebugInfo = BuildDebugInfo(topicId, request.Query, completedQuery, searchResults, null, embeddingDiagnostics, new List<string>())
                 });
             }
 
             // Step 4: Rerank - take top chunks, max 3 per document
-            var rerankedChunks = RerankChunks(searchResults, MaxContextChunks, MaxChunksPerDocument);
+            var rerankedChunks = await _reranker.RerankAsync(completedQuery, searchResults, MaxContextChunks, MaxChunksPerDocument, ct);
 
             // Step 5: Build RAG context
             var (ragContext, citations) = BuildRagContext(rerankedChunks);
@@ -240,33 +266,7 @@ public class QaService : IQaService
             // Step 6: Build prompts
             var systemPrompt = BuildSystemPrompt();
 
-            // Fetch recent conversation history for multi-turn context
-            var recentMessages = await _db.QaMessages
-                .Where(m => m.SessionId == session.Id && m.Role == "user" && m.Id != userMessage.Id)
-                .OrderByDescending(m => m.CreatedAt)
-                .Take(3)
-                .OrderBy(m => m.CreatedAt)
-                .ToListAsync(ct);
-
-            var recentAssistantMessages = await _db.QaMessages
-                .Where(m => m.SessionId == session.Id && m.Role == "assistant" && m.CreatedAt < now)
-                .OrderByDescending(m => m.CreatedAt)
-                .Take(3)
-                .OrderBy(m => m.CreatedAt)
-                .ToListAsync(ct);
-
-            // Build conversation history string
-            var historySb = new System.Text.StringBuilder();
-            var allHistory = recentMessages.Zip(recentAssistantMessages, (u, a) => new { u, a })
-                .OrderBy(x => x.u.CreatedAt)
-                .ToList();
-            foreach (var h in allHistory)
-            {
-                historySb.AppendLine($"用户：{h.u.Content}");
-                historySb.AppendLine($"助手：{h.a.Content}");
-                historySb.AppendLine();
-            }
-            var historyText = historySb.Length > 0 ? historySb.ToString() : null;
+            var historyText = BuildHistoryText(recentHistory);
 
             var userPrompt = BuildUserPrompt(request.Query, ragContext, historyText);
 
@@ -293,6 +293,9 @@ public class QaService : IQaService
                 modelUsed = "degraded";
             }
 
+            var (validatedAnswer, citationValidationIssues) = ValidateAndRepairCitations(answerContent, citations);
+            answerContent = validatedAnswer;
+
             sw.Stop();
 
             // Step 8: Build citations from used chunks (system-generated, not model-generated)
@@ -301,13 +304,9 @@ public class QaService : IQaService
             var confidence = modelUsed == "degraded"
                 ? Math.Round(CalculateConfidence(topScore, citations.Count, rerankedChunks.Count) * 0.5, 2) // halve confidence for degraded
                 : CalculateConfidence(topScore, citations.Count, rerankedChunks.Count);
-            var debugInfo = new QaDebugInfo
-            {
-                QueryPlan = $"hybrid_search(topic={topicId?.ToString() ?? "all"}, top_k={RetrievalTopK})",
-                ContextTokens = ragContext.Length / 4, // rough estimate
-                RetrievedTitles = searchResults.Take(5).Select(r => r.Title).ToList(),
-                SystemPrompt = systemPrompt
-            };
+            var debugInfo = BuildDebugInfo(
+                topicId, request.Query, completedQuery, searchResults, ragContext,
+                embeddingDiagnostics, citationValidationIssues, systemPrompt);
 
             var retrievalSnapshotJson = JsonSerializer.Serialize(new
             {
@@ -427,7 +426,11 @@ public class QaService : IQaService
                 {
                     try
                     {
-                        citations = JsonSerializer.Deserialize<List<Citation>>(m.Citations);
+                        citations = JsonSerializer.Deserialize<List<Citation>>(m.Citations, JsonOptions);
+                        if (citations is { Count: > 0 } && citations.All(citation => citation.DocumentId == Guid.Empty))
+                        {
+                            citations = JsonSerializer.Deserialize<List<Citation>>(m.Citations, LegacyJsonOptions);
+                        }
                     }
                     catch
                     {
@@ -460,6 +463,30 @@ public class QaService : IQaService
 
                 return Mapper.ToQaMessageResponse(m, citations, retrieval);
             }).ToList();
+
+            var citationsToEnrich = result
+                .SelectMany(message => message.Citations ?? new List<Citation>())
+                .Where(citation => citation.DocumentId != Guid.Empty)
+                .ToList();
+            if (citationsToEnrich.Count > 0)
+            {
+                var documentIds = citationsToEnrich
+                    .Select(citation => citation.DocumentId)
+                    .Distinct()
+                    .ToList();
+                var documentTitles = await _db.Documents
+                    .Where(document => documentIds.Contains(document.Id))
+                    .Select(document => new { document.Id, document.Title })
+                    .ToDictionaryAsync(document => document.Id, document => document.Title, ct);
+
+                foreach (var citation in citationsToEnrich)
+                {
+                    if (documentTitles.TryGetValue(citation.DocumentId, out var title) && !string.IsNullOrWhiteSpace(title))
+                    {
+                        citation.Title = title;
+                    }
+                }
+            }
 
             return ApiResponse<List<QaMessageResponse>>.Ok(result);
         }
@@ -512,33 +539,175 @@ public class QaService : IQaService
         }
     }
 
+    public async Task<ApiResponse<object>> DeleteSessionAsync(
+        Guid userId,
+        Guid sessionId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var session = await _db.QaSessions
+                .FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId, ct);
+            if (session == null)
+            {
+                return ApiResponse<object>.Fail("session_not_found", "Session not found");
+            }
+
+            var messages = await _db.QaMessages
+                .Where(m => m.SessionId == sessionId && m.UserId == userId)
+                .ToListAsync(ct);
+            var messageIds = messages.Select(m => m.Id).ToList();
+            var retrievalLogs = await _db.RetrievalLogs
+                .Where(log => log.UserId == userId && log.QaMessageId.HasValue && messageIds.Contains(log.QaMessageId.Value))
+                .ToListAsync(ct);
+
+            _db.RetrievalLogs.RemoveRange(retrievalLogs);
+            _db.QaMessages.RemoveRange(messages);
+            _db.QaSessions.Remove(session);
+            await _db.SaveChangesAsync(ct);
+
+            return ApiResponse<object>.Ok(new { deleted = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete QA session {SessionId}", sessionId);
+            return ApiResponse<object>.Fail("delete_session_error", ex.Message);
+        }
+    }
+
     // ===== Private Helpers =====
 
-    private static List<SearchResultItem> RerankChunks(
-        List<SearchResultItem> results,
-        int maxChunks,
-        int maxPerDocument)
+    private static readonly Regex FollowUpQueryRegex = new(
+        @"(它|他|她|这个|该|上述|前面|其中|这些|那些|其|对此|然后|后来|什么时候|怎么样|为什么|呢)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CitationMarkerRegex = new(@"\[(\d+)\]", RegexOptions.Compiled);
+
+    private static string CompleteQueryFromHistory(string query, IReadOnlyList<QaMessage> history)
     {
-        var byDocument = new Dictionary<Guid, List<SearchResultItem>>();
+        var current = query.Trim();
+        if (history.Count == 0 || string.IsNullOrWhiteSpace(current)) return current;
+        var requiresContext = current.Length <= 24 || FollowUpQueryRegex.IsMatch(current);
+        if (!requiresContext) return current;
+        var previousQuestion = history.LastOrDefault(message => message.Role == "user")?.Content?.Trim();
+        if (string.IsNullOrWhiteSpace(previousQuestion)) return current;
+        return $"{previousQuestion}；追问：{current}";
+    }
 
-        foreach (var item in results.OrderByDescending(r => r.Score))
+    private static string? BuildHistoryText(IReadOnlyList<QaMessage> history)
+    {
+        if (history.Count == 0) return null;
+        var sb = new System.Text.StringBuilder();
+        foreach (var message in history.OrderBy(message => message.CreatedAt))
         {
-            if (!byDocument.ContainsKey(item.DocumentId))
-            {
-                byDocument[item.DocumentId] = new List<SearchResultItem>();
-            }
-
-            if (byDocument[item.DocumentId].Count < maxPerDocument)
-            {
-                byDocument[item.DocumentId].Add(item);
-            }
+            var role = message.Role == "user" ? "用户" : "助手";
+            var content = message.Content.Length > 1200 ? message.Content[..1200] + "…" : message.Content;
+            sb.AppendLine($"{role}：{content}");
         }
+        return sb.ToString();
+    }
 
-        return byDocument
-            .SelectMany(kv => kv.Value)
-            .OrderByDescending(r => r.Score)
-            .Take(maxChunks)
+    private async Task<EmbeddingDiagnostics> GetEmbeddingDiagnosticsAsync(
+        Guid userId, Guid? topicId, CancellationToken ct)
+    {
+        var chunksQuery =
+            from chunk in _db.DocumentChunks.AsNoTracking()
+            join document in _db.Documents.AsNoTracking() on chunk.DocumentId equals document.Id
+            where chunk.UserId == userId && (!topicId.HasValue || document.TopicId == topicId)
+            select chunk.Id;
+        var chunkIds = await chunksQuery.ToListAsync(ct);
+        var rows = chunkIds.Count == 0
+            ? new List<(Guid ChunkId, string Status)>()
+            : (await _db.ChunkEmbeddings.AsNoTracking()
+                .Where(embedding => chunkIds.Contains(embedding.ChunkId))
+                .Select(embedding => new { embedding.ChunkId, embedding.Status })
+                .ToListAsync(ct))
+                .Select(row => (row.ChunkId, row.Status))
+                .ToList();
+
+        var doneChunks = rows.Where(row => row.Status == "done").Select(row => row.ChunkId).Distinct().Count();
+        var diagnostics = new EmbeddingDiagnostics
+        {
+            EligibleChunkCount = chunkIds.Count,
+            TotalEmbeddingCount = rows.Count,
+            DoneCount = rows.Count(row => row.Status == "done"),
+            PendingCount = rows.Count(row => row.Status is "pending" or "processing"),
+            FailedCount = rows.Count(row => row.Status == "failed"),
+            StaleCount = rows.Count(row => row.Status == "stale"),
+            Coverage = chunkIds.Count == 0 ? 0 : Math.Round((double)doneChunks / chunkIds.Count, 3)
+        };
+        (diagnostics.Status, diagnostics.Message) = diagnostics switch
+        {
+            { EligibleChunkCount: 0 } => ("empty", "当前范围内没有可检索的文档分块。"),
+            { DoneCount: 0, FailedCount: > 0 } => ("failed", "Embedding 全部不可用，请检查向量模型连接并重试失败任务。"),
+            { DoneCount: 0 } => ("pending", "Embedding 尚未完成，当前只能使用关键词与中文全文索引。"),
+            { Coverage: < 0.5 } => ("degraded", "Embedding 覆盖率低于 50%，向量召回可能不完整。"),
+            { FailedCount: > 0 } => ("warning", "部分 Embedding 生成失败，建议在文档诊断中重试。"),
+            _ => ("healthy", "Embedding 状态正常。")
+        };
+        return diagnostics;
+    }
+
+    private static string BuildNoResultAnswer(EmbeddingDiagnostics diagnostics)
+    {
+        var diagnosis = diagnostics.Status == "healthy" ? string.Empty : $"\n\n诊断：{diagnostics.Message}";
+        return "抱歉，我在当前知识库中没有找到足够相关的资料。请尝试调整关键词、切换专题或补充资料。" + diagnosis;
+    }
+
+    private static double CalculateEvidenceRelevance(SearchResultItem item)
+    {
+        var vector = item.ScoreDetail?.VectorScore ?? 0;
+        var keyword = item.ScoreDetail?.KeywordScore ?? 0;
+        var multiChannel = item.MatchChannels.Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 2 ? 0.30 : 0;
+        return Math.Clamp(Math.Max(Math.Max(vector, keyword), multiChannel), 0, 1);
+    }
+
+    private static (string Answer, List<string> Issues) ValidateAndRepairCitations(
+        string answer, IReadOnlyList<Citation> citations)
+    {
+        var issues = new List<string>();
+        var validIndices = citations.Select(citation => citation.Index).ToHashSet();
+        var repaired = CitationMarkerRegex.Replace(answer, match =>
+        {
+            var index = int.Parse(match.Groups[1].Value);
+            if (validIndices.Contains(index)) return match.Value;
+            issues.Add($"移除不存在的引用编号 [{index}]");
+            return string.Empty;
+        });
+        var used = CitationMarkerRegex.Matches(repaired)
+            .Select(match => int.Parse(match.Groups[1].Value))
+            .Where(validIndices.Contains)
+            .Distinct()
             .ToList();
+        if (citations.Count > 0 && used.Count == 0)
+        {
+            var markers = string.Join(" ", citations.Take(3).Select(citation => $"[{citation.Index}]"));
+            repaired = repaired.TrimEnd() + $"\n\n参考来源：{markers}";
+            issues.Add("回答未包含有效引用，已补充来源编号");
+        }
+        return (repaired, issues);
+    }
+
+    private static QaDebugInfo BuildDebugInfo(
+        Guid? topicId,
+        string originalQuery,
+        string completedQuery,
+        IReadOnlyList<SearchResultItem> searchResults,
+        string? ragContext,
+        EmbeddingDiagnostics embeddingDiagnostics,
+        List<string> citationIssues,
+        string? systemPrompt = null)
+    {
+        return new QaDebugInfo
+        {
+            QueryPlan = $"history_completion -> tokenized_keyword + fts_zh + multi_vector -> rrf -> evidence_gate(topic={topicId?.ToString() ?? "all"}, top_k={RetrievalTopK})",
+            OriginalQuery = originalQuery,
+            CompletedQuery = completedQuery,
+            ContextTokens = ragContext == null ? null : ragContext.Length / 4,
+            RetrievedTitles = searchResults.Take(5).Select(result => result.Title).ToList(),
+            SystemPrompt = systemPrompt,
+            EmbeddingDiagnostics = embeddingDiagnostics,
+            CitationValidationIssues = citationIssues
+        };
     }
 
     private static (string context, List<Citation> citations) BuildRagContext(
@@ -552,14 +721,18 @@ public class QaService : IQaService
             var chunk = chunks[i];
             var citationIndex = i + 1;
 
-            sb.AppendLine($"[{citationIndex}] Document: {chunk.Title}");
+            sb.AppendLine($"[{citationIndex}] 中文标题: {chunk.TitleZh ?? chunk.Title}");
+            if (!string.IsNullOrWhiteSpace(chunk.TitleOriginal))
+                sb.AppendLine($"    原文标题: {chunk.TitleOriginal}");
             if (!string.IsNullOrEmpty(chunk.SourceUrl))
             {
                 sb.AppendLine($"    Source: {chunk.SourceUrl}");
             }
             sb.AppendLine($"    Document ID: {chunk.DocumentId}");
             sb.AppendLine($"    Chunk ID: {chunk.ChunkId}");
-            sb.AppendLine($"    Content: {chunk.Snippet}");
+            if (!string.IsNullOrWhiteSpace(chunk.LocalizedSnippet))
+                sb.AppendLine($"    中文元数据: {chunk.LocalizedSnippet}");
+            sb.AppendLine($"    原文证据: {chunk.OriginalSnippet ?? chunk.Snippet}");
             sb.AppendLine();
 
             citations.Add(new Citation
@@ -572,7 +745,20 @@ public class QaService : IQaService
                 SourceDomain = chunk.SourceDomain,
                 SourceType = chunk.SourceType,
                 Snippet = chunk.Snippet,
-                Score = chunk.Score
+                Score = chunk.Score,
+                TitleOriginal = chunk.TitleOriginal,
+                TitleZh = chunk.TitleZh,
+                DisplaySnippet = chunk.LocalizedSnippet ?? chunk.Snippet,
+                OriginalSnippet = chunk.OriginalSnippet ?? chunk.Snippet,
+                ContentLanguage = chunk.ContentLanguage,
+                DisplayContentSource = chunk.DisplayContentSource,
+                ChunkGroupId = chunk.ChunkGroupId,
+                Section = chunk.Section,
+                PageStart = chunk.PageStart,
+                PageEnd = chunk.PageEnd,
+                LocalizationId = chunk.LocalizationId,
+                TranslationType = chunk.TranslationType,
+                ReviewStatus = chunk.ReviewStatus
             });
         }
 
@@ -645,6 +831,7 @@ public class QaService : IQaService
 1. 只能基于提供的参考资料回答问题，不要编造或使用资料之外的信息
 2. 如果参考资料不足以完全回答问题，请明确说明哪些部分有资料支持，哪些部分缺少资料
 3. 回答时请在相关信息处标注引用编号，如 [1]、[2] 等，对应参考资料的编号
+3.1 中文元数据用于理解与展示，但事实核验必须以“原文证据”为准；引用必须能回溯到原文文档、分块和页码
 4. 回答要简洁、准确、有条理
 5. 如果参考资料与问题完全无关，请说明资料相关性不足
 6. 使用中文回答

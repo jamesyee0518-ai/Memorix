@@ -18,18 +18,19 @@ import {
   Bug,
   ChevronDown,
   ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { qaApi, feedbackApi, ApiRequestError } from "@/lib/api";
 import { useTopicStore } from "@/stores/topic-store";
 import type { QaSession, Citation } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Markdown } from "@/components/markdown";
 import { ConversationList } from "@/components/conversation-list";
@@ -47,9 +48,23 @@ interface ChatMessage {
   confidence?: number;
   debugInfo?: {
     queryPlan?: string;
+    originalQuery?: string;
+    completedQuery?: string;
     contextTokens?: number;
     retrievedTitles?: string[];
     systemPrompt?: string;
+    embeddingDiagnostics?: {
+      eligibleChunkCount: number;
+      totalEmbeddingCount: number;
+      doneCount: number;
+      pendingCount: number;
+      failedCount: number;
+      staleCount: number;
+      coverage: number;
+      status: string;
+      message?: string;
+    };
+    citationValidationIssues?: string[];
   };
 }
 
@@ -80,40 +95,62 @@ function getConfidenceConfig(confidence: number) {
 // ===== 引用来源卡片 =====
 
 function CitationCard({ citation }: { citation: Citation }) {
+  const hasChunk = citation.chunkId && citation.chunkId !== "00000000-0000-0000-0000-000000000000";
+  const documentHref = `/documents/${citation.documentId}${hasChunk ? `?chunkId=${citation.chunkId}` : ""}`;
+  const sourceLabel = {
+    human_reviewed: "人工审校译文",
+    machine_translated: "机器译文",
+    summary: "中文摘要",
+    original: "原文",
+  }[citation.displayContentSource || "original"] || "原文";
+
   return (
-    <Link
-      href={`/documents/${citation.documentId}?chunkId=${citation.chunkId}`}
-      className="block rounded-lg border bg-muted/30 p-3 transition-colors hover:border-primary hover:bg-muted/50"
-    >
+    <div className="rounded-lg border bg-muted/30 p-3 transition-colors hover:border-primary hover:bg-muted/50">
       <div className="flex items-start gap-3">
         <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
           {citation.index}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
+          <Link href={documentHref} className="flex items-center gap-1.5 rounded-sm hover:underline">
             <FileText className="size-3.5 shrink-0 text-muted-foreground" />
             <p className="truncate text-sm font-medium text-primary">
-              {citation.title || "无标题"}
+              {citation.titleZh || citation.title || "查看知识库文档"}
             </p>
-          </div>
+          </Link>
+          <span className="mt-1 inline-flex rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {sourceLabel}
+          </span>
           {citation.sourceUrl && (
             <a
               href={citation.sourceUrl}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground hover:text-primary hover:underline"
+              className="mt-1 inline-flex max-w-full items-center gap-1 text-xs text-muted-foreground hover:text-primary hover:underline"
             >
               <ExternalLink className="size-3 shrink-0" />
-              <span className="truncate">{citation.sourceUrl}</span>
+              <span className="truncate">查看原文{citation.sourceDomain ? ` · ${citation.sourceDomain}` : ""}</span>
             </a>
           )}
+          {citation.titleOriginal && citation.titleOriginal !== citation.titleZh && (
+            <p className="mt-1 truncate text-xs text-muted-foreground">原题：{citation.titleOriginal}</p>
+          )}
+          {(citation.section || citation.pageStart) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {citation.section || "原文位置"}{citation.pageStart ? ` · 第 ${citation.pageStart}${citation.pageEnd && citation.pageEnd !== citation.pageStart ? `–${citation.pageEnd}` : ""} 页` : ""}
+            </p>
+          )}
           <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-            {citation.snippet}
+            {citation.displaySnippet || citation.snippet}
           </p>
+          {citation.originalSnippet && citation.originalSnippet !== citation.displaySnippet && (
+            <details className="mt-1 text-xs text-muted-foreground">
+              <summary className="cursor-pointer select-none">查看原文证据</summary>
+              <p className="mt-1 line-clamp-4 leading-relaxed">{citation.originalSnippet}</p>
+            </details>
+          )}
         </div>
       </div>
-    </Link>
+    </div>
   );
 }
 
@@ -297,6 +334,43 @@ function MessageBubble({
                     </div>
                   )}
 
+                  {message.debugInfo.completedQuery &&
+                    message.debugInfo.completedQuery !== message.debugInfo.originalQuery && (
+                      <div>
+                        <p className="font-medium text-foreground">历史补全查询</p>
+                        <p className="mt-1 rounded border bg-background p-2 text-muted-foreground">
+                          {message.debugInfo.completedQuery}
+                        </p>
+                      </div>
+                    )}
+
+                  {message.debugInfo.embeddingDiagnostics && (
+                    <div>
+                      <p className="font-medium text-foreground">Embedding 状态诊断</p>
+                      <div className="mt-1 rounded border bg-background p-2 text-muted-foreground">
+                        <p>{message.debugInfo.embeddingDiagnostics.message}</p>
+                        <p className="mt-1">
+                          覆盖率 {Math.round(message.debugInfo.embeddingDiagnostics.coverage * 100)}%
+                          · 完成 {message.debugInfo.embeddingDiagnostics.doneCount}
+                          · 等待 {message.debugInfo.embeddingDiagnostics.pendingCount}
+                          · 失败 {message.debugInfo.embeddingDiagnostics.failedCount}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {message.debugInfo.citationValidationIssues &&
+                    message.debugInfo.citationValidationIssues.length > 0 && (
+                      <div>
+                        <p className="font-medium text-foreground">引用一致性修复</p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
+                          {message.debugInfo.citationValidationIssues.map((issue) => (
+                            <li key={issue}>{issue}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
                   {/* Retrieved Titles */}
                   {message.debugInfo.retrievedTitles &&
                     message.debugInfo.retrievedTitles.length > 0 && (
@@ -392,12 +466,13 @@ export default function QaPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [feedbackedMessages, setFeedbackedMessages] = useState<
     Record<string, boolean>
   >({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     fetchTopics().catch(() => {});
@@ -450,7 +525,7 @@ export default function QaPage() {
       const response = await qaApi.ask({
         sessionId: currentSessionId,
         topicId,
-        question,
+        query: question,
         retrieval: { searchType: "hybrid", topK: 10 },
       });
 
@@ -486,21 +561,21 @@ export default function QaPage() {
     }
   }, [input, topicId, sessionId, loading]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     setSessionId("");
     setMessages([]);
     setInput("");
     setLoading(false);
     setFeedbackedMessages({});
     inputRef.current?.focus();
-  };
+  }, []);
 
   // 加载历史会话消息
   const handleSelectSession = useCallback(async (sid: string) => {
@@ -524,6 +599,18 @@ export default function QaPage() {
     }
     inputRef.current?.focus();
   }, []);
+
+  const handleSessionDeleted = useCallback(
+    (deletedSessionId: string, nextSessionId?: string) => {
+      if (deletedSessionId !== sessionId) return;
+      if (nextSessionId) {
+        handleSelectSession(nextSessionId);
+      } else {
+        handleNewChat();
+      }
+    },
+    [sessionId, handleSelectSession, handleNewChat]
+  );
 
   // 提交回答反馈
   const handleFeedback = async (messageId: string, isPositive: boolean) => {
@@ -554,24 +641,44 @@ export default function QaPage() {
   return (
     <div className="flex h-[calc(100vh-4rem)]">
       {/* 左侧：会话历史侧边栏 */}
-      <aside className="hidden w-[280px] shrink-0 border-r bg-white dark:bg-slate-900 md:block">
-        <ConversationList
-          topicId={topicId || undefined}
-          selectedSessionId={sessionId}
-          onSelectSession={handleSelectSession}
-          onNewChat={handleNewChat}
-        />
-      </aside>
+      {sessionPanelOpen && (
+        <aside className="hidden w-[280px] shrink-0 border-r bg-white dark:bg-slate-900 md:block">
+          <ConversationList
+            topicId={topicId || undefined}
+            selectedSessionId={sessionId}
+            onSelectSession={handleSelectSession}
+            onNewChat={handleNewChat}
+            onSessionDeleted={handleSessionDeleted}
+          />
+        </aside>
+      )}
 
       {/* 右侧：聊天区 */}
       <div className="flex flex-1 flex-col">
         {/* 顶部栏 */}
         <div className="flex items-center justify-between border-b bg-white px-4 py-3 dark:bg-slate-900">
           <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="hidden md:inline-flex"
+              title={sessionPanelOpen ? "收起对话列表" : "展开对话列表"}
+              aria-label={sessionPanelOpen ? "收起对话列表" : "展开对话列表"}
+              onClick={() => setSessionPanelOpen((open) => !open)}
+            >
+              {sessionPanelOpen ? (
+                <PanelLeftClose className="size-4" />
+              ) : (
+                <PanelLeftOpen className="size-4" />
+              )}
+            </Button>
             <h1 className="text-lg font-bold">智能问答</h1>
             <Select value={topicId} onValueChange={(v) => setTopicId(v as string)}>
               <SelectTrigger size="sm" className="w-48">
-                <SelectValue placeholder="选择专题" />
+                <span className="flex-1 truncate text-left">
+                  {topics.find((topic) => topic.id === topicId)?.name ?? "选择专题"}
+                </span>
               </SelectTrigger>
               <SelectContent>
                 {topics.map((t) => (
@@ -640,15 +747,15 @@ export default function QaPage() {
 
         {/* 底部输入区 */}
         <div className="border-t bg-white px-4 py-3 dark:bg-slate-900">
-          <div className="mx-auto flex max-w-3xl items-center gap-2">
-            <Input
+          <div className="mx-auto flex max-w-3xl items-end gap-2">
+            <Textarea
               ref={inputRef}
               placeholder={topicId ? "输入您的问题..." : "请先选择专题"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={loading || !topicId}
-              className="h-10 flex-1 text-base"
+              className="h-[140px] min-h-[140px] max-h-[140px] flex-1 resize-none text-base leading-6"
             />
             <Button
               size="lg"

@@ -15,10 +15,20 @@ public class ChunkingService : IChunkingService
     private const int MinParagraphTokens = 150;      // ~600 chars
 
     private readonly ILogger<ChunkingService> _logger;
+    private readonly ILanguageDetectionService _languageDetection;
+    private readonly IContentClassificationService _contentClassification;
+    private readonly IChineseNormalizationService _chineseNormalization;
 
-    public ChunkingService(ILogger<ChunkingService> logger)
+    public ChunkingService(
+        ILogger<ChunkingService> logger,
+        ILanguageDetectionService languageDetection,
+        IContentClassificationService contentClassification,
+        IChineseNormalizationService chineseNormalization)
     {
         _logger = logger;
+        _languageDetection = languageDetection;
+        _contentClassification = contentClassification;
+        _chineseNormalization = chineseNormalization;
     }
 
     public List<DocumentChunk> ChunkDocument(Document document)
@@ -46,6 +56,11 @@ public class ChunkingService : IChunkingService
             var tokenCount = EstimateTokens(raw.Content);
             var contentHash = Sha256Hex(raw.Content);
             var headingPathStr = raw.HeadingPath.Count > 0 ? string.Join(" / ", raw.HeadingPath) : null;
+            var language = _languageDetection.Detect(raw.Content);
+            var classification = _contentClassification.Classify(raw.Content, language);
+            var normalizedContent = language.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                ? _chineseNormalization.Normalize(raw.Content)
+                : null;
 
             var chunk = new DocumentChunk
             {
@@ -58,6 +73,14 @@ public class ChunkingService : IChunkingService
                 ChunkTitle = raw.HeadingPath.Count > 0 ? raw.HeadingPath[^1] : document.Title,
                 Content = raw.Content,
                 ContentMarkdown = raw.MarkdownContent,
+                ContentOriginal = raw.Content,
+                ContentNormalized = normalizedContent,
+                DetectedLanguage = language.PrimaryLanguage,
+                LanguageConfidence = (decimal)language.Confidence,
+                LanguageDistribution = language.DistributionJson,
+                ContentType = classification.ContentType,
+                ProcessingRoute = classification.ProcessingRoute,
+                LocalizationRequired = classification.LocalizationRequired,
                 TokenCount = tokenCount,
                 CharCount = charCount,
                 StartOffset = raw.StartOffset,
@@ -72,6 +95,7 @@ public class ChunkingService : IChunkingService
                 HeadingPath = headingPathStr,
                 SectionLevel = raw.HeadingPath.Count,
                 ContentHash = contentHash,
+                ChunkGroupId = Guid.NewGuid(),
                 IndexStatus = "pending"
             };
 

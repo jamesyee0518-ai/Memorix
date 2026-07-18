@@ -52,7 +52,8 @@ public static class DependencyInjection
         {
             var connectionString = configuration.GetConnectionString("DefaultConnection");
             services.AddDbContext<AppDbContext>(options =>
-                options.UseNpgsql(connectionString));
+                options.UseNpgsql(connectionString)
+                    .UseSnakeCaseNamingConvention());
         }
 
         services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
@@ -61,12 +62,26 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddScoped<ICurrentUserContext, CurrentUserContext>();
+        services.AddScoped<IWorkspaceAuthorizationService, WorkspaceAuthorizationService>();
+        services.AddSingleton<ICredentialStore, PlatformCredentialStore>();
+        services.AddScoped<ILocalIdentityService, LocalIdentityService>();
+        services.AddScoped<IBindingService, BindingService>();
+        services.AddScoped<IOAuthBindingService, OAuthBindingService>();
+        services.AddSingleton<CloudInboxScheduleMonitor>();
+        services.AddHostedService<CloudInboxPullWorker>();
         services.AddHttpContextAccessor();
 
         // Storage
         services.AddSingleton<MinioStorageProvider>();
-        services.AddSingleton<IFileStorageProvider>(sp => sp.GetRequiredService<MinioStorageProvider>());
         services.AddSingleton<LocalFileStorageProvider>();
+        if (string.Equals(databaseProvider, "sqlite", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IFileStorageProvider>(sp => sp.GetRequiredService<LocalFileStorageProvider>());
+        }
+        else
+        {
+            services.AddSingleton<IFileStorageProvider>(sp => sp.GetRequiredService<MinioStorageProvider>());
+        }
         services.AddScoped<IFileStorageFactory, FileStorageFactory>();
 
         // HTTP clients
@@ -100,11 +115,24 @@ public static class DependencyInjection
         services.AddScoped<IContentCleaner, ContentCleaner>();
         services.AddScoped<IMarkdownNormalizer, MarkdownNormalizer>();
         services.AddScoped<IAISummaryService, AISummaryService>();
+        services.AddSingleton<ILanguageDetectionService, LanguageDetectionService>();
+        services.AddSingleton<IContentClassificationService, ContentClassificationService>();
+        services.AddSingleton<IChineseNormalizationService, ChineseNormalizationService>();
+        services.AddSingleton<IChineseTokenizer, ChineseTokenizer>();
+        services.AddScoped<ITerminologyService, TerminologyService>();
+        services.AddScoped<IChineseFullTextIndexService, ChineseFullTextIndexService>();
+        services.AddScoped<IL1LocalizationService, L1LocalizationService>();
+        services.AddSingleton<ILocalizationQualityService, LocalizationQualityService>();
+        services.AddScoped<IChunkLocalizationService, ChunkLocalizationService>();
+        services.AddScoped<IChunkEnrichmentService, ChunkEnrichmentService>();
+        services.AddScoped<IMultiVectorEmbeddingService, MultiVectorEmbeddingService>();
+        services.AddScoped<IMultilingualBatchJobService, MultilingualBatchJobService>();
 
         // Background Service - Phase 2
         services.AddHostedService<DocumentProcessingBackgroundService>();
         services.AddHostedService<MediaProcessingWorker>();
         services.AddHostedService<PushNotificationWorker>();
+        services.AddHostedService<MultilingualBatchWorker>();
 
         // ===== Phase 3 Services =====
 
@@ -124,6 +152,8 @@ public static class DependencyInjection
 
         // Search Service
         services.AddScoped<ISearchService, SearchService>();
+        services.AddSingleton<IRetrievalFusionService, RetrievalFusionService>();
+        services.AddSingleton<IRerankerService, HeuristicRerankerService>();
 
         // Vector Store (pgvector backend for cloud mode)
         services.AddScoped<IVectorStore, PgVectorStore>();
@@ -174,7 +204,7 @@ public static class DependencyInjection
         // ===== Dual-mode Foundation Services =====
 
         // Config Service (local config file)
-        services.AddSingleton<IConfigService, ConfigService>();
+        services.AddScoped<IConfigService, ConfigService>();
 
         // Workspace Service
         services.AddScoped<IWorkspaceService, WorkspaceService>();

@@ -4,6 +4,7 @@ import {
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -217,6 +218,7 @@ export default function App() {
     <SafeAreaView style={styles.screen}>
       <StatusBar style="light" />
       <View style={styles.container}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.title}>Memorix</Text>
           <Text style={styles.subtitle}>发送到知识库 Inbox</Text>
@@ -288,6 +290,7 @@ export default function App() {
             </Pressable>
           )}
         </View>
+        </ScrollView>
 
         <View style={styles.footer}>
           <Text style={styles.footerText}>设备 {clientId ? "已绑定" : "绑定中"}</Text>
@@ -314,7 +317,11 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    padding: 20,
+  },
+  content: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 24,
     gap: 18,
   },
   header: {
@@ -403,10 +410,15 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   footer: {
-    marginTop: "auto",
+    flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#334155",
+    backgroundColor: "#111827",
+    paddingHorizontal: 20,
+    paddingVertical: 14,
   },
   footerText: {
     color: "#94a3b8",

@@ -12,5 +12,6 @@ public interface IReportService
     Task<ApiResponse<CreateReportResponse>> RegenerateAsync(Guid userId, Guid reportId, CancellationToken ct = default);
     Task<ApiResponse<ReportDetail>> UpdateAsync(Guid userId, Guid reportId, UpdateReportRequest request, CancellationToken ct = default);
     Task<ApiResponse<object>> ArchiveAsync(Guid userId, Guid reportId, CancellationToken ct = default);
+    Task<ApiResponse<object>> DeleteAsync(Guid userId, Guid reportId, CancellationToken ct = default);
     Task<ApiResponse<ReportJobStatusResponse>> GetJobStatusAsync(Guid userId, Guid jobId, CancellationToken ct = default);
 }

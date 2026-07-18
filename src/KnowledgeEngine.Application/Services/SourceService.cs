@@ -196,7 +196,7 @@ public class SourceService
 
         using var uploadStream = new MemoryStream(bytes);
         var storageProvider = await _fileStorageService.UploadFileInternalAsync(
-            bucket, objectKey, uploadStream, contentType, fileSize, ct);
+            userId.ToString(), bucket, objectKey, uploadStream, contentType, fileSize, ct);
 
         var fileObject = new FileObject
         {
@@ -402,17 +402,71 @@ public class SourceService
     public async Task<ApiResponse<object>> TriggerProcessingAsync(Guid sourceId, CancellationToken ct = default)
     {
         var userId = RequireUserId();
+        var normalizedSourceId = sourceId.ToString("D");
+        var normalizedUserId = userId.ToString("D");
 
-        var source = await _db.Sources.FirstOrDefaultAsync(s => s.Id == sourceId && s.UserId == userId, ct);
-        if (source == null)
+        // The Python fetcher writes canonical lower-case UUID text, while
+        // Microsoft.Data.Sqlite binds Guid parameters as upper-case text.
+        // SQLite compares those TEXT values case-sensitively, so keep the
+        // regular comparison and add a normalized compatibility branch.
+        var source = await _db.Sources.AsNoTracking().FirstOrDefaultAsync(s =>
+            s.Id == sourceId || s.Id.ToString().ToLower() == normalizedSourceId, ct);
+        if (source != null && source.UserId != userId)
         {
             throw new NotFoundException("Source", sourceId);
         }
 
-        // Validate source status - don't allow triggering if already done or processing
+        var restoredMissingSource = source == null;
+        if (source == null)
+        {
+            var document = await _db.Documents.FirstOrDefaultAsync(
+                d =>
+                    (d.SourceId == sourceId || d.SourceId.ToString().ToLower() == normalizedSourceId) &&
+                    (d.UserId == userId || d.UserId.ToString().ToLower() == normalizedUserId), ct);
+            if (document == null)
+            {
+                throw new NotFoundException("Source", sourceId);
+            }
+
+            var restoredAt = DateTime.UtcNow;
+            var canRefetchUrl = !string.IsNullOrWhiteSpace(document.SourceUrl);
+            source = new Source
+            {
+                Id = sourceId,
+                UserId = userId,
+                TopicId = document.TopicId,
+                SourceType = canRefetchUrl ? "url" : "text",
+                Title = document.TitleOriginal ?? document.Title,
+                Url = canRefetchUrl ? document.SourceUrl : null,
+                Domain = document.SourceDomain,
+                Author = document.Author,
+                PublishedAt = document.PublishedAt,
+                RawText = canRefetchUrl ? null : document.ContentText,
+                ContentHash = document.ContentHash,
+                ImportedAt = document.CreatedAt,
+                Status = "queued",
+                CreatedAt = document.CreatedAt,
+                UpdatedAt = restoredAt
+            };
+            _db.Sources.Add(source);
+            _logger.LogWarning(
+                "Restored missing source {SourceId} from document {DocumentId} before retry",
+                sourceId, document.Id);
+        }
+
+        // A fetcher import can have a completed Source while its linked Document AI
+        // processing failed. In that case the document retry action must be allowed
+        // to queue the source again.
         if (source.Status == "done")
         {
-            throw new ValidationException("status", "Source has already been processed");
+            var hasFailedDocument = await _db.Documents.AnyAsync(d =>
+                (d.SourceId == sourceId || d.SourceId.ToString().ToLower() == normalizedSourceId) &&
+                (d.UserId == userId || d.UserId.ToString().ToLower() == normalizedUserId) &&
+                d.AiStatus == "failed", ct);
+            if (!hasFailedDocument)
+            {
+                throw new ValidationException("status", "Source has already been processed");
+            }
         }
 
         if (source.Status == "processing" || source.Status == "parsing" ||
@@ -427,7 +481,25 @@ public class SourceService
         source.ErrorMessage = null;
         source.UpdatedAt = now;
 
-        await _db.SaveChangesAsync(ct);
+        if (restoredMissingSource)
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        else
+        {
+            var affected = await _db.Sources
+                .Where(s =>
+                    (s.Id == sourceId || s.Id.ToString().ToLower() == normalizedSourceId) &&
+                    (s.UserId == userId || s.UserId.ToString().ToLower() == normalizedUserId))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(s => s.Status, "queued")
+                    .SetProperty(s => s.ErrorMessage, (string?)null)
+                    .SetProperty(s => s.UpdatedAt, now), ct);
+            if (affected == 0)
+            {
+                throw new NotFoundException("Source", sourceId);
+            }
+        }
 
         _logger.LogInformation("Processing triggered for source {SourceId} by {UserId}", sourceId, userId);
 

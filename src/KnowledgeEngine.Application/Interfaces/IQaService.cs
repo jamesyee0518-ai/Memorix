@@ -8,4 +8,5 @@ public interface IQaService
     Task<ApiResponse<QaAnswerResponse>> AskAsync(Guid userId, QaAskRequest request, CancellationToken ct = default);
     Task<ApiResponse<List<QaMessageResponse>>> GetSessionMessagesAsync(Guid userId, Guid sessionId, CancellationToken ct = default);
     Task<ApiResponse<PagedResult<QaSessionListItem>>> GetSessionsAsync(Guid userId, Guid? topicId, CancellationToken ct = default);
+    Task<ApiResponse<object>> DeleteSessionAsync(Guid userId, Guid sessionId, CancellationToken ct = default);
 }

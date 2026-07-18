@@ -29,7 +29,11 @@ import type {
   EntityListItem,
   EntityDetail,
   Tag,
+  Terminology,
   DocumentChunkItem,
+  ChunkLocalization,
+  ChunkEnrichment,
+  MultilingualBatchJob,
   AiJobListItem,
   SearchRequest,
   SearchResult,
@@ -72,6 +76,12 @@ import type {
   CloudInboxPullInput,
   CloudInboxPullResult,
   CloudInboxSyncLog,
+  CloudAccountBinding,
+  WorkspaceBinding,
+  OAuthStartInput,
+  OAuthStartResult,
+  OAuthStatus,
+  CreateWorkspaceBindingInput,
   MobileDevice,
   PushNotification,
   LocalConfig,
@@ -94,7 +104,13 @@ import type {
   AgentToolDefinition,
 } from "./types";
 
-const API_BASE_URL = "http://127.0.0.1:9101/api";
+const currentPort =
+  typeof window !== "undefined" ? Number(window.location.port) : Number.NaN;
+const isDesktopPort = currentPort >= 43120 && currentPort <= 43218;
+const API_BASE_URL = isDesktopPort
+  ? `http://127.0.0.1:${currentPort + 1}/api`
+  : "http://127.0.0.1:9101/api";
+export const API_ORIGIN = API_BASE_URL.replace(/\/api$/, "");
 const TOKEN_KEY = "access_token";
 
 /** 获取 localStorage 中的 token */
@@ -408,6 +424,8 @@ export const documentApi = {
   list(params?: {
     topicId?: string;
     aiStatus?: string;
+    page?: number;
+    pageSize?: number;
   }): Promise<PagedResult<DocumentListItem>> {
     return request<PagedResult<DocumentListItem>>({
       method: "GET",
@@ -450,6 +468,9 @@ export const documentApi = {
       url: `/documents/${id}/resummarize`,
     });
   },
+  updateLocalizedMetadata(id: string, data: { titleZh: string; summaryZh: string; keywordsZh?: string[]; approved?: boolean }): Promise<boolean> {
+    return request<boolean>({ method: "PUT", url: `/documents/${id}/localized-metadata`, data });
+  },
 };
 
 // ===== 实体 API =====
@@ -490,6 +511,21 @@ export const entityApi = {
 };
 
 // ===== 标签 API =====
+
+export const terminologyApi = {
+  list(query?: string): Promise<Terminology[]> {
+    return request<Terminology[]>({ method: "GET", url: "/terminology", params: { query } });
+  },
+  create(data: Omit<Terminology, "id" | "createdAt" | "updatedAt">): Promise<Terminology> {
+    return request<Terminology>({ method: "POST", url: "/terminology", data });
+  },
+  update(id: string, data: Omit<Terminology, "id" | "createdAt" | "updatedAt">): Promise<Terminology> {
+    return request<Terminology>({ method: "PUT", url: `/terminology/${id}`, data });
+  },
+  delete(id: string): Promise<boolean> {
+    return request<boolean>({ method: "DELETE", url: `/terminology/${id}` });
+  },
+};
 
 export const tagApi = {
   async list(params?: { type?: string }): Promise<Tag[]> {
@@ -655,7 +691,7 @@ export const qaApi = {
   ask(data: {
     sessionId: string;
     topicId: string;
-    question: string;
+    query: string;
     retrieval?: { searchType: string; topK: number };
   }): Promise<QaAnswerResponse> {
     return request<QaAnswerResponse>({
@@ -669,6 +705,13 @@ export const qaApi = {
     return request<QaMessage[]>({
       method: "GET",
       url: `/qa/sessions/${sessionId}/messages`,
+    });
+  },
+
+  deleteSession(sessionId: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/qa/sessions/${sessionId}`,
     });
   },
 };
@@ -761,6 +804,13 @@ export const reportApi = {
     return request<void>({
       method: "POST",
       url: `/reports/${reportId}/archive`,
+    });
+  },
+
+  delete(reportId: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/reports/${reportId}`,
     });
   },
 
@@ -1146,6 +1196,80 @@ export const cloudInboxApi = {
       params: { limit },
     });
   },
+
+  retryScheduledPull(): Promise<{ queued: boolean }> {
+    return request<{ queued: boolean }>({
+      method: "POST",
+      url: "/cloud-inbox/schedule/retry",
+    });
+  },
+
+  cancelScheduledPull(): Promise<{ cancelled: boolean }> {
+    return request<{ cancelled: boolean }>({
+      method: "POST",
+      url: "/cloud-inbox/schedule/cancel",
+    });
+  },
+};
+
+// ===== Cloud Account / Workspace Binding API =====
+
+export const bindingApi = {
+  listCloudAccounts(): Promise<CloudAccountBinding[]> {
+    return request<CloudAccountBinding[]>({
+      method: "GET",
+      url: "/bindings/cloud-accounts",
+    });
+  },
+
+  listWorkspaceBindings(workspaceId?: string): Promise<WorkspaceBinding[]> {
+    return request<WorkspaceBinding[]>({
+      method: "GET",
+      url: "/bindings/workspaces",
+      params: workspaceId ? { workspaceId } : undefined,
+    });
+  },
+
+  createWorkspaceBinding(
+    data: CreateWorkspaceBindingInput
+  ): Promise<WorkspaceBinding> {
+    return request<WorkspaceBinding>({
+      method: "POST",
+      url: "/bindings/workspaces",
+      data,
+    });
+  },
+
+  unbindWorkspace(id: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/bindings/workspaces/${encodeURIComponent(id)}`,
+    });
+  },
+
+  unbindCloudAccount(id: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/bindings/cloud-accounts/${encodeURIComponent(id)}`,
+    });
+  },
+};
+
+export const oauthApi = {
+  start(data: OAuthStartInput): Promise<OAuthStartResult> {
+    return request<OAuthStartResult>({
+      method: "POST",
+      url: "/oauth/start",
+      data,
+    });
+  },
+
+  status(sessionId: string): Promise<OAuthStatus> {
+    return request<OAuthStatus>({
+      method: "GET",
+      url: `/oauth/status/${encodeURIComponent(sessionId)}`,
+    });
+  },
 };
 
 // ===== Inbox API =====
@@ -1453,6 +1577,78 @@ export const chunkApi = {
       method: "GET",
       url: `/documents/chunks/${chunkId}`,
     });
+  },
+
+  translate(chunkId: string, force = false): Promise<ChunkLocalization> {
+    return request<ChunkLocalization>({
+      method: "POST",
+      url: `/chunks/${chunkId}/translate`,
+      data: { languageCode: "zh-CN", force, translationType: "machine" },
+    });
+  },
+
+  getLocalizations(chunkId: string): Promise<ChunkLocalization[]> {
+    return request<ChunkLocalization[]>({
+      method: "GET",
+      url: `/chunks/${chunkId}/localizations`,
+    });
+  },
+
+  review(
+    chunkId: string,
+    localizationId: string,
+    data: { headingLocalized?: string; contentLocalized: string; approved: boolean }
+  ): Promise<ChunkLocalization> {
+    return request<ChunkLocalization>({
+      method: "POST",
+      url: `/chunks/${chunkId}/localizations/${localizationId}/review`,
+      data,
+    });
+  },
+
+  enrich(chunkId: string, force = false): Promise<ChunkEnrichment> {
+    return request<ChunkEnrichment>({
+      method: "POST",
+      url: `/chunks/${chunkId}/enrich`,
+      data: { force },
+    });
+  },
+
+  getEnrichments(chunkId: string): Promise<ChunkEnrichment[]> {
+    return request<ChunkEnrichment[]>({
+      method: "GET",
+      url: `/chunks/${chunkId}/enrichments`,
+    });
+  },
+
+  translateDocument(documentId: string, force = false): Promise<MultilingualBatchJob> {
+    return request<MultilingualBatchJob>({
+      method: "POST",
+      url: `/documents/${documentId}/translate-chunks`,
+      data: { force, maxChunks: 500 },
+    });
+  },
+
+  enrichDocument(documentId: string, force = false): Promise<MultilingualBatchJob> {
+    return request<MultilingualBatchJob>({
+      method: "POST",
+      url: `/documents/${documentId}/enrich-chunks`,
+      data: { force, maxChunks: 500 },
+    });
+  },
+
+  rebuildMultiVectors(documentId: string): Promise<MultilingualBatchJob> {
+    return request<MultilingualBatchJob>({
+      method: "POST", url: `/documents/${documentId}/rebuild-multi-vectors`, data: { maxChunks: 500 },
+    });
+  },
+
+  getDocumentJobs(documentId: string): Promise<MultilingualBatchJob[]> {
+    return request<MultilingualBatchJob[]>({ method: "GET", url: `/documents/${documentId}/batch-jobs` });
+  },
+
+  controlJob(jobId: string, action: "pause" | "resume" | "retry"): Promise<MultilingualBatchJob> {
+    return request<MultilingualBatchJob>({ method: "POST", url: `/multilingual-jobs/${jobId}/${action}` });
   },
 };
 

@@ -6,6 +6,7 @@ using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Settings;
 using KnowledgeEngine.Domain.Entities;
+using KnowledgeEngine.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -165,7 +166,7 @@ public class ExportWorker : BackgroundService
         var fileExtension = GetFileExtension(job.ExportType);
         objectKey += fileExtension;
 
-        // Step 3: Upload to MinIO
+        // Step 3: Upload using the active runtime storage provider.
         using var stream = new MemoryStream(contentBytes);
         await fileStorage.UploadFileAsync(bucket, objectKey, stream, contentType, contentBytes.Length, ct);
 
@@ -180,7 +181,7 @@ public class ExportWorker : BackgroundService
             MimeType = contentType,
             SizeBytes = contentBytes.Length,
             Sha256 = ComputeHash(contentBytes),
-            StorageProvider = "minio",
+            StorageProvider = fileStorage is LocalFileStorageProvider ? "local_fs" : "minio",
             CreatedAt = now
         };
 

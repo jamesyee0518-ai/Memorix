@@ -5,6 +5,7 @@ using KnowledgeEngine.Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using KnowledgeEngine.Application.Security;
 
 namespace KnowledgeEngine.Api.Controllers;
 
@@ -41,7 +42,9 @@ public class ReleaseNotesController : BaseController
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById([FromRoute] Guid id, CancellationToken ct)
     {
-        var note = await _db.ReleaseNotes.FirstOrDefaultAsync(r => r.Id == id, ct);
+        var canManage = User.IsInRole(PlatformRoles.PlatformAdmin) || User.IsInRole(PlatformRoles.Operator);
+        var note = await _db.ReleaseNotes.FirstOrDefaultAsync(
+            r => r.Id == id && (r.IsPublished || canManage), ct);
         if (note == null)
         {
             return Ok(ApiResponse<ReleaseNoteResponse>.Fail("not_found", "Release note not found", GetTraceId()));
@@ -52,6 +55,7 @@ public class ReleaseNotesController : BaseController
 
     // ===== POST /api/release-notes — 创建（管理端）=====
     [HttpPost]
+    [Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
     public async Task<IActionResult> Create([FromBody] CreateReleaseNoteRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Version))
@@ -90,6 +94,7 @@ public class ReleaseNotesController : BaseController
 
     // ===== PUT /api/release-notes/{id} — 更新（管理端）=====
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] UpdateReleaseNoteRequest request, CancellationToken ct)
     {
         var note = await _db.ReleaseNotes.FirstOrDefaultAsync(r => r.Id == id, ct);
@@ -123,6 +128,7 @@ public class ReleaseNotesController : BaseController
 
     // ===== POST /api/release-notes/{id}/publish — 发布（管理端）=====
     [HttpPost("{id:guid}/publish")]
+    [Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
     public async Task<IActionResult> Publish([FromRoute] Guid id, CancellationToken ct)
     {
         var note = await _db.ReleaseNotes.FirstOrDefaultAsync(r => r.Id == id, ct);

@@ -17,6 +17,7 @@ import {
   Globe2,
   Inbox,
   Layers3,
+  Languages,
   Library,
   Lock,
   LucideIcon,
@@ -24,6 +25,7 @@ import {
   Network,
   NotebookTabs,
   Search,
+  ScanSearch,
   Server,
   ShieldCheck,
   Moon,
@@ -36,14 +38,15 @@ import {
   Zap
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DownloadButton } from "@/components/download-button";
 
 type Lang = "zh" | "en";
 type Theme = "dark" | "light";
 
 const copy = {
   zh: {
-    nav: ["产品", "功能", "使用场景", "本地优先", "Agent 接入", "定价", "FAQ"],
-    join: "加入内测",
+    nav: ["产品", "功能", "多语言资料库", "使用场景", "本地优先", "Agent 接入", "下载", "FAQ"],
+    join: "下载客户端",
     demo: "查看演示",
     productName: "Memorix",
     productEn: "你的私人 AI 记忆体",
@@ -51,9 +54,9 @@ const copy = {
     heroTitle: "让碎片信息，变成你的 AI 知识资产",
     heroSubtitle:
       "Memorix 是一款本地优先、可选云端、支持手机采集和 Agent 调用的 AI 知识资产工具。它可以把网页、PDF、图片、录音、笔记和聊天输入，自动清洗、摘要、结构化、检索、问答并生成报告。",
-    ctaPrimary: "加入内测",
+    ctaPrimary: "下载客户端",
     ctaSecondary: "了解工作流",
-    workflow: ["采集", "清洗", "结构化", "检索", "问答", "报告", "Agent 调用"],
+    workflow: ["采集", "语言识别", "结构化", "中文索引", "检索/问答", "报告", "Agent"],
     painTitle: "你保存了很多信息，但真正能复用的很少",
     solutionTitle: "从“收藏信息”升级为“知识资产”",
     solutionText:
@@ -69,13 +72,13 @@ const copy = {
     agentText:
       "通过本地 MCP Server，Claude、Cursor、Hermes、本地自动化脚本和其他 Agent 可以在授权范围内搜索、问答、读取文档和获取报告。",
     compareTitle: "不是保存信息，而是加工信息、理解信息、复用信息",
-    ctaTitle: "开始构建你的个人 AI 知识资产",
+    ctaTitle: "下载 Memorix，开始构建你的 AI 知识资产",
     bookDemo: "预约演示",
     roadmap: "查看产品路线"
   },
   en: {
-    nav: ["Product", "Features", "Use Cases", "Local-first", "Agent Integration", "Pricing", "FAQ"],
-    join: "Join Beta",
+    nav: ["Product", "Features", "Multilingual", "Use Cases", "Local-first", "Agent Integration", "Download", "FAQ"],
+    join: "Download App",
     demo: "View Demo",
     productName: "Memorix",
     productEn: "Your Private AI Memory",
@@ -83,9 +86,9 @@ const copy = {
     heroTitle: "Turn Scattered Information into Your Private AI Memory",
     heroSubtitle:
       "Memorix is a local-first AI knowledge asset engine with optional cloud sync, mobile capture, and agent integration. It turns web pages, PDFs, images, audio notes, text snippets, and chat inputs into structured, searchable, reusable knowledge.",
-    ctaPrimary: "Join Beta",
+    ctaPrimary: "Download App",
     ctaSecondary: "See Workflow",
-    workflow: ["Capture", "Clean", "Structure", "Search", "Ask", "Report", "Agent"],
+    workflow: ["Capture", "Detect", "Structure", "Chinese Index", "Search/Ask", "Report", "Agent"],
     painTitle: "You save a lot of information. Very little becomes reusable knowledge.",
     solutionTitle: "From Saving Information to Building Knowledge Assets",
     solutionText:
@@ -101,7 +104,7 @@ const copy = {
     agentText:
       "Through a local MCP Server, Claude, Cursor, Hermes, local automation scripts, and other agents can search, ask, read documents, and retrieve reports within your authorized scope.",
     compareTitle: "Not just saving information, but processing, understanding, and reusing it.",
-    ctaTitle: "Start Building Your Personal AI Knowledge Assets",
+    ctaTitle: "Download Memorix and Start Building Your AI Knowledge Assets",
     bookDemo: "Book a Demo",
     roadmap: "View Roadmap"
   }
@@ -112,22 +115,24 @@ const pain = [
   ["找不回来", "Hard to find again", "曾经看过的重要内容，真正需要时很难快速定位。", "Important information you once read becomes hard to find when you need it.", Search],
   ["缺少结构", "Missing structure", "收藏只是保存，无法自动提取摘要、标签、实体、风险和机会。", "Saving is not understanding. Most tools do not extract summaries, tags, entities, risks, or opportunities.", Layers3],
   ["难以输出", "Hard to produce output", "资料很多，但生成日报、周报、研究报告和文章素材依然需要大量人工整理。", "Turning raw materials into briefs, reports, and writing assets still takes too much manual work.", FileText],
-  ["Agent 无法调用", "Agents cannot access it", "个人知识库无法自然接入 Claude、Cursor、Hermes 或本地 Agent 工作流。", "Personal knowledge is often inaccessible to Claude, Cursor, Hermes, or local agents.", Bot]
+  ["Agent 无法调用", "Agents cannot access it", "个人知识库无法自然接入 Claude、Cursor、Hermes 或本地 Agent 工作流。", "Personal knowledge is often inaccessible to Claude, Cursor, Hermes, or local agents.", Bot],
+  ["语言成为复用门槛", "Language becomes a barrier", "外文资料常因检索词、阅读成本和术语差异而沉睡在资料库中。", "Foreign-language sources remain unused because of search vocabulary, reading effort, and inconsistent terminology.", Languages]
 ] as const;
 
 const valueLayers = [
   ["记忆层", "Memory Layer", "保存网页、PDF、文本、图片、录音和文件，保留原始来源。", "Save web pages, PDFs, text, images, audio, and files with original sources preserved.", Archive],
-  ["理解层", "Understanding Layer", "AI 自动生成摘要、要点、标签、实体、关系、风险、机会和价值评分。", "AI extracts summaries, key points, tags, entities, relationships, risks, opportunities, and value scores.", BrainCircuit],
-  ["复用层", "Reuse Layer", "通过搜索、问答、日报、周报、专题报告、Markdown 导出和 Agent 调用复用知识。", "Reuse knowledge through search, Q&A, daily briefs, weekly reports, topic reports, Markdown export, and agent access.", GitBranch]
+  ["理解层", "Understanding Layer", "识别文档与分块语言，为外文生成中文标题、摘要、关键词、实体和按需译文，同时保留原文。", "Detect document and chunk languages, create Chinese titles, summaries, keywords, entities, and on-demand translations while preserving originals.", BrainCircuit],
+  ["复用层", "Reuse Layer", "用中文统一检索多语言资料，以中文问答和生成报告，并保留可回溯的原文引用。", "Search multilingual sources in Chinese, ask and report in Chinese, and trace citations to original evidence.", GitBranch]
 ] as const;
 
 const features = [
   ["多源资料导入", "Multi-source import", "支持 URL、PDF、Markdown、文本、图片、录音和手机聊天式输入。", "Import URLs, PDFs, Markdown, text, images, audio, and mobile chat-style captures.", UploadCloud],
   ["Inbox 收件箱", "Inbox", "所有碎片信息先进入 Inbox，由 AI 推荐专题和处理方式，避免污染正式知识库。", "All inputs first enter Inbox, where AI suggests topics and processing actions before they enter your knowledge base.", Inbox],
   ["AI 清洗与结构化", "AI cleaning and structuring", "自动清洗网页和文档，生成摘要、结论、关键要点、标签、实体、风险、机会和价值评分。", "Clean and structure content into summaries, conclusions, key points, tags, entities, risks, opportunities, and value scores.", Sparkles],
+  ["多语言自适应处理", "Adaptive multilingual processing", "自动识别中文、外文和混合内容，按资料价值生成中文标题、摘要、关键词、译文和索引。", "Detect Chinese, foreign-language, and mixed content, then build Chinese titles, summaries, keywords, translations, and indexes as needed.", Languages],
   ["专题知识库", "Topic knowledge bases", "按 AI 行业、竞品研究、项目资料、投研资料、技术文档等专题组织知识。", "Organize knowledge by AI research, competitor analysis, project knowledge, investment research, and technical documentation.", Library],
-  ["混合检索", "Hybrid retrieval", "结合关键词检索、向量检索、标签过滤、实体过滤、时间过滤和价值评分排序。", "Combine keyword search, vector search, tag filters, entity filters, time filters, and value-based ranking.", Search],
-  ["RAG 问答", "RAG Q&A", "基于专题资料进行问答，回答带引用来源，避免无依据生成。", "Ask questions over your topic knowledge base with source-backed answers and citations.", MessageSquareText],
+  ["混合检索", "Hybrid retrieval", "结合中文全文、关键词、向量、跨语言语义、术语、实体、时间与价值评分，让中文问题召回中文和外文资料。", "Combine Chinese full-text, keywords, vectors, cross-language semantics, terminology, entities, time, and value ranking.", Search],
+  ["RAG 问答", "RAG Q&A", "基于多语言资料进行中文问答，回答以中文呈现，并引用可回溯的外文原始证据。", "Ask in Chinese across multilingual sources, read Chinese-form answers, and trace citations to original-language evidence.", MessageSquareText],
   ["自动报告", "Automatic reports", "一键生成日报、周报、专题研究报告、竞品分析和写作素材。", "Generate daily briefs, weekly reports, topic research reports, competitor analysis, and writing materials.", FileText],
   ["Markdown / Obsidian 导出", "Markdown / Obsidian export", "支持导出为 Markdown 和 Obsidian Vault，数据开放、可迁移、不锁定。", "Export to Markdown and Obsidian Vault. Your data stays open, portable, and under your control.", NotebookTabs],
   ["本地模型与云模型", "Local and cloud models", "支持 Ollama、LM Studio、本地模型和用户自带 OpenAI-compatible API。", "Support Ollama, LM Studio, local models, and user-provided OpenAI-compatible APIs.", Server],
@@ -144,8 +149,8 @@ const steps = [
   ["创建工作区", "Create a workspace", "选择本地、云端或混合模式。", "Choose local, cloud, or hybrid mode."],
   ["创建专题", "Create topics", "例如 AI 行业研究、竞品分析、项目知识库、技术资料库。", "For AI research, competitor analysis, project knowledge, or technical documentation."],
   ["导入资料", "Import sources", "粘贴网页链接，上传 PDF，输入笔记，或用手机发送资料到 Inbox。", "Paste URLs, upload PDFs, write notes, or send materials from mobile to Inbox."],
-  ["AI 自动处理", "Let AI process them", "系统解析、清洗、摘要、打标签、抽取实体、分块并向量化。", "Parse, clean, summarize, tag, extract entities, chunk, and embed."],
-  ["搜索和问答", "Search and ask", "用自然语言检索资料，基于专题知识库进行 RAG 问答。", "Search naturally and ask questions over your topic knowledge base."],
+  ["AI 自适应处理", "Adaptive AI processing", "系统解析、清洗并识别文档和分块语言，生成中文理解层、标签、实体、分块与多路索引。", "Parse, clean, detect document and chunk languages, and build a Chinese understanding layer, entities, chunks, and multiple indexes."],
+  ["中文搜索和问答", "Search and ask in Chinese", "直接用中文检索中文与外文资料；回答显示中文结果，并可展开查看原文证据。", "Search Chinese and foreign sources in Chinese, read answers in Chinese, and inspect original evidence."],
   ["生成报告", "Generate reports", "输出日报、周报、专题报告、选题库或文章大纲。", "Create daily briefs, weekly reports, topic reports, idea lists, or article outlines."],
   ["接入 Agent", "Connect agents", "通过 MCP / API 让 Claude、Cursor、Hermes 或自动化脚本调用知识库。", "Let Claude, Cursor, Hermes, or automation scripts access your knowledge through MCP / API."]
 ] as const;
@@ -155,17 +160,25 @@ const useCases = [
   ["竞品研究库", "Competitor research", "持续跟踪竞品官网、更新日志、用户评价和新闻报道。", "Track competitor websites, changelogs, user reviews, and news coverage.", Fingerprint],
   ["项目知识库", "Project knowledge", "沉淀需求文档、技术方案、会议纪要、合同资料和开发规范。", "Organize requirements, technical plans, meeting notes, contracts, and development specs.", Library],
   ["创作者素材库", "Creator source library", "把资料转成选题、脚本、大纲、观点和素材片段。", "Turn sources into topics, scripts, outlines, opinions, and reusable snippets.", Sparkles],
-  ["Agent 长期记忆", "Agent long-term memory", "让本地 Agent 调用你的私有知识，而不是每次重新上传上下文。", "Give local agents persistent access to your private knowledge without re-uploading context every time.", Bot]
+  ["Agent 长期记忆", "Agent long-term memory", "让本地 Agent 调用你的私有知识，而不是每次重新上传上下文。", "Give local agents persistent access to your private knowledge without re-uploading context every time.", Bot],
+  ["全球产业与技术研究", "Global industry and technology research", "持续导入英文、日文、韩文等海外资料，用中文统一搜索、问答和生成报告。", "Continuously ingest international sources, search and ask across them in Chinese, and generate reports with original evidence.", Globe2]
 ] as const;
 
 const trust = [
   ["原始资料默认本地保存", "Original sources stay local by default", Lock],
   ["支持 Markdown / Obsidian 开放格式", "Open Markdown / Obsidian-compatible formats", NotebookTabs],
   ["本地模型优先，可选云端模型", "Local models first, cloud models optional", Server],
-  ["云端能力必须由用户主动开启", "Cloud features are opt-in", ShieldCheck]
+  ["云端能力必须由用户主动开启", "Cloud features are opt-in", ShieldCheck],
+  ["多语言处理可按工作区选择本地或云端模型", "Choose local or cloud models for multilingual processing", Languages]
 ] as const;
 
 const faq = [
+  ["外文资料会被全部自动翻译吗？", "Will every foreign-language source be fully translated?", "不会。默认先生成中文标题、摘要、关键词和实体；命中的段落可按需翻译，核心资料可选择完整中文化。原文始终保留。", "No. By default Memorix creates Chinese titles, summaries, keywords, and entities. Relevant chunks can be translated on demand, while core sources can be fully localized. Originals are always preserved."],
+  ["可以只用中文搜索英文资料吗？", "Can I search English sources only in Chinese?", "可以。系统结合中文全文与语义索引、术语扩展和外文跨语言向量，使中文查询能够召回中文和外文资料。", "Yes. Chinese full-text and semantic indexes, terminology expansion, and cross-language vectors let Chinese queries retrieve Chinese and foreign-language sources."],
+  ["中文回答能查看外文原文吗？", "Can I inspect the original behind a Chinese answer?", "可以。引用会区分中文原文、系统译文、AI 摘要和外文原文，并在可用时返回原始文档、章节或页码。", "Yes. Citations distinguish original Chinese, machine translations, AI summaries, and foreign-language originals, linking back to the document, section, or page when available."],
+  ["多语言处理一定会把资料发送到云端吗？", "Does multilingual processing always send data to the cloud?", "不一定。本地、云端或混合处理由工作区配置决定；启用云端能力前会明确提示可能发送的数据范围。", "Not necessarily. Local, cloud, or hybrid processing is controlled by workspace settings, with disclosure before cloud processing is enabled."],
+  ["支持哪些语言？", "Which languages are supported?", "首期重点保障简体中文和英文；繁体中文、日文、韩文及混合语言资料将按实际版本与评测状态标注。", "The initial release prioritizes Simplified Chinese and English. Traditional Chinese, Japanese, Korean, and mixed-language sources are labeled according to release and evaluation status."],
+  ["支持哪些桌面系统？", "Which desktop systems are supported?", "计划提供 Apple Silicon Mac 的 DMG 和 64 位 Windows 安装程序。网站只在正式下载地址可用时开放对应按钮。", "Memorix plans to provide a DMG for Apple Silicon Macs and a Windows x64 installer. Each button is enabled only when its official download URL is available."],
   ["这个产品和 Obsidian 有什么区别？", "How is this different from Obsidian?", "Obsidian 是优秀的本地笔记和链接工具。Memorix 更偏向资料采集、AI 清洗、结构化、检索、报告生成和 Agent 调用，可以导出到 Obsidian，而不是替代它。", "Obsidian is excellent for local notes and linked thinking. Memorix focuses on capture, AI processing, structured retrieval, reports, and agent access. It can export to Obsidian rather than replace it."],
   ["数据一定要上传云端吗？", "Does my data have to be uploaded?", "不需要。默认可以本地工作。云端 Inbox、云同步和云模型都是可选能力。", "No. You can work locally by default. Cloud Inbox, cloud sync, and cloud models are optional."],
   ["是否支持本地模型？", "Does it support local models?", "支持 Ollama、LM Studio、本地模型，以及 OpenAI-compatible API。", "Yes. It supports Ollama, LM Studio, local models, and OpenAI-compatible APIs."],
@@ -176,6 +189,19 @@ const faq = [
   ["Agent 如何调用知识库？", "How do agents access the knowledge base?", "通过本地 MCP Server 或 API，Agent 可以在授权范围内搜索专题、问答、读取文档和获取报告。", "Through a local MCP Server or API, agents can search topics, ask questions, read documents, and retrieve reports within authorized scopes."],
   ["MVP 阶段有哪些功能？", "What is included in the MVP?", "优先包含资料导入、Inbox、AI 摘要与标签、专题库、混合检索、RAG 问答、报告生成和 Markdown 导出。", "The MVP prioritizes import, Inbox, AI summaries and tags, topic bases, hybrid search, RAG Q&A, report generation, and Markdown export."],
   ["适合哪些用户？", "Who is it for?", "适合 AI 研究者、产业研究者、产品经理、创业者、技术自媒体、开发者和咨询顾问。", "It is for AI researchers, industry analysts, product managers, founders, technical creators, developers, and consultants."]
+] as const;
+
+const multilingualStages = [
+  ["自动识别", "Detect", "识别文档和分块的主语言、混合比例与内容类型。", "Identify primary language, language mix, and content type at document and chunk level.", ScanSearch],
+  ["自适应处理", "Adapt", "中文直接规范化；外文按策略生成中文理解层，代码、公式和引用保持原样。", "Normalize Chinese, localize foreign content by policy, and preserve code, formulas, and references.", GitBranch],
+  ["多路索引", "Index", "建立中文全文、中文语义、术语和外文跨语言检索路径。", "Build Chinese full-text, semantic, terminology, and original cross-language retrieval paths.", Layers3],
+  ["中文使用，原文举证", "Use in Chinese, cite originals", "用中文搜索、问答和生成报告，每条关键结论都可返回原文。", "Search, ask, and report in Chinese while tracing key claims to original evidence.", Languages],
+] as const;
+
+const localizationLevels = [
+  ["L1", "快速理解", "Quick understanding", "生成中文标题、摘要、关键词和实体，适合大规模资料入库。", "Generate Chinese titles, summaries, keywords, and entities for high-volume ingestion.", "默认", "Default"],
+  ["L2", "按需阅读", "On-demand reading", "资料被检索或问答命中时，翻译相关分块并缓存复用。", "Translate relevant chunks when retrieved, then cache them for reuse.", "智能", "Adaptive"],
+  ["L3", "深度中文化", "Deep localization", "为核心专题或高价值资料建立完整中文内容层。", "Build a complete Chinese content layer for core topics or high-value sources.", "深度", "Deep"],
 ] as const;
 
 function pick(lang: Lang, zh: string, en: string) {
@@ -315,6 +341,9 @@ export default function Home() {
       ["是否支持本地优先", "Local-first", ["✓", "✓", "—", "✓"]],
       ["是否支持 Obsidian / Markdown", "Obsidian / Markdown", ["—", "✓", "△", "✓"]],
       ["是否支持 Agent / MCP", "Agent / MCP", ["—", "—", "△", "✓"]]
+      , ["多语言自适应处理", "Adaptive multilingual processing", ["—", "△", "△", "✓"]]
+      , ["中文检索外文资料", "Search foreign sources in Chinese", ["—", "△", "△", "✓"]]
+      , ["中文展示与原文引用", "Chinese presentation with original citations", ["—", "—", "△", "✓"]]
     ],
     []
   );
@@ -348,7 +377,7 @@ export default function Home() {
           </a>
           <nav className="hidden items-center gap-6 lg:flex">
             {t.nav.map((item, index) => (
-              <a key={item} href={["#product", "#features", "#use-cases", "#local", "#agents", "#pricing", "#faq"][index]} className="text-sm text-slate-300 hover:text-white">
+              <a key={item} href={["#product", "#features", "#multilingual", "#use-cases", "#local", "#agents", "#download", "#faq"][index]} className="text-sm text-slate-300 hover:text-white">
                 {item}
               </a>
             ))}
@@ -368,7 +397,6 @@ export default function Home() {
               {isDark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <Button variant="ghost" className="hidden xl:inline-flex">{t.demo}</Button>
-            <Button>{t.join}</Button>
           </div>
         </div>
       </header>
@@ -382,9 +410,12 @@ export default function Home() {
             </div>
             <h1 className="text-balance text-5xl font-semibold tracking-normal text-white md:text-7xl">{t.heroTitle}</h1>
             <p className="mt-6 max-w-2xl text-lg leading-9 text-slate-300">{t.heroSubtitle}</p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {(lang === "zh" ? ["多语言资料自适应处理", "中文统一检索", "原文证据可追溯"] : ["Adaptive multilingual processing", "Unified Chinese retrieval", "Traceable original evidence"]).map((badge) => <span key={badge} className="rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-xs text-cyan-100">{badge}</span>)}
+            </div>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button className="h-12">{t.ctaPrimary}<ArrowRight size={17} /></Button>
-              <Button variant="secondary" className="h-12">{t.ctaSecondary}</Button>
+              <DownloadButton lang={lang} className="h-12" />
+              <a href="#multilingual" className="inline-flex h-12 items-center justify-center gap-2 rounded-md border border-white/12 bg-white/8 px-5 text-sm font-medium text-white transition hover:bg-white/12">{t.ctaSecondary}<ArrowRight size={17} /></a>
             </div>
             <div className="mt-8 flex flex-wrap items-center gap-2">
               {t.workflow.map((item, index) => (
@@ -401,7 +432,7 @@ export default function Home() {
 
       <Section id="product">
         <SectionTitle title={t.painTitle} />
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {pain.map(([zh, en, zhText, enText, Icon]) => (
             <IconCard key={zh} icon={Icon} title={pick(lang, zh, en)} text={pick(lang, zhText, enText)} />
           ))}
@@ -433,6 +464,33 @@ export default function Home() {
         </div>
       </Section>
 
+      <Section id="multilingual">
+        <SectionTitle
+          eyebrow="MULTILINGUAL KNOWLEDGE"
+          title={lang === "zh" ? "外文资料进入，中文知识可用" : "Bring in global sources. Work with them in Chinese."}
+          text={lang === "zh" ? "无需在导入前整理语言或手工翻译。系统从文档到分块自动识别语言，建立中文理解层与多路索引；中文内容帮助理解，原始资料负责举证。" : "No pre-sorting or manual translation required. Detect language from document to chunk level, build a Chinese understanding layer and multiple retrieval paths, and keep originals as evidence."}
+        />
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {multilingualStages.map(([zh, en, zhText, enText, Icon], index) => (
+            <div key={zh} className="glass interactive-card rounded-lg p-6">
+              <div className="flex items-center justify-between"><div className="flex h-11 w-11 items-center justify-center rounded-md bg-violet-300/12 text-violet-200"><Icon size={22} /></div><span className="text-sm text-slate-500">0{index + 1}</span></div>
+              <h3 className="mt-6 text-lg font-semibold text-white">{pick(lang, zh, en)}</h3>
+              <p className="mt-3 text-sm leading-7 text-slate-300">{pick(lang, zhText, enText)}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-8 rounded-xl border border-white/10 bg-slate-950/60 p-6 md:p-8">
+          <div className="grid items-center gap-6 lg:grid-cols-[1fr_auto_1fr_auto_1fr]">
+            {[lang === "zh" ? "资料导入" : "Sources", lang === "zh" ? "语言与内容识别" : "Language detection", lang === "zh" ? "中文索引 + 原文索引" : "Chinese + original indexes"].map((item, index) => <div key={item} className="contents"><div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-5 text-center font-medium text-white">{item}</div>{index < 2 && <ArrowRight className="mx-auto hidden text-cyan-300 lg:block" />}</div>)}
+          </div>
+        </div>
+        <div className="mt-10 text-center"><h3 className="text-2xl font-semibold text-white">{lang === "zh" ? "不是所有资料都需要全文翻译" : "Not every source needs full translation"}</h3></div>
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          {localizationLevels.map(([level, zh, en, zhText, enText, zhBadge, enBadge]) => <div key={level} className="interactive-card rounded-lg border border-white/10 bg-white/[0.04] p-6"><div className="flex items-center justify-between"><span className="font-mono text-cyan-300">{level}</span><span className="rounded-full bg-white/8 px-3 py-1 text-xs text-slate-300">{pick(lang, zhBadge, enBadge)}</span></div><h3 className="mt-5 text-xl font-semibold text-white">{pick(lang, zh, en)}</h3><p className="mt-3 text-sm leading-7 text-slate-300">{pick(lang, zhText, enText)}</p></div>)}
+        </div>
+        <div className="mt-8 rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-5 text-center text-sm font-medium text-emerald-200">{lang === "zh" ? "中文内容帮助理解，原始资料负责举证。" : "Chinese content supports understanding; original sources provide evidence."}</div>
+      </Section>
+
       <Section id="local">
         <SectionTitle title={t.modesTitle} />
         <div className="grid gap-5 lg:grid-cols-3">
@@ -461,7 +519,7 @@ export default function Home() {
 
       <Section id="use-cases">
         <SectionTitle title={t.useTitle} />
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {useCases.map(([zh, en, zhText, enText, Icon]) => (
             <IconCard key={zh} icon={Icon} title={pick(lang, zh, en)} text={pick(lang, zhText, enText)} />
           ))}
@@ -537,16 +595,15 @@ export default function Home() {
         </div>
       </Section>
 
-      <Section id="pricing">
+      <Section id="download">
         <div className="rounded-lg border border-white/10 bg-gradient-to-br from-cyan-300/12 via-violet-300/10 to-white/[0.03] p-8 text-center md:p-14">
           <h2 className="text-balance text-3xl font-semibold text-white md:text-5xl">{t.ctaTitle}</h2>
           <p className="mx-auto mt-5 max-w-2xl text-base leading-8 text-slate-300">
-            {lang === "zh" ? "加入早期内测，帮助我们把研究采集、知识整理、报告生成和 Agent 记忆打磨成真正可长期使用的工具。" : "Join the early beta and help shape a durable tool for capture, knowledge processing, reports, and agent memory."}
+            {lang === "zh" ? "把全球资料沉淀为可用中文工作的长期知识资产。系统会推荐适合当前设备的版本，你也可以查看全部下载。" : "Turn global sources into long-term knowledge assets you can work with in Chinese. We recommend a build for your device, while keeping every available download visible."}
           </p>
           <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Button>{t.ctaPrimary}</Button>
-            <Button variant="secondary">{t.bookDemo}</Button>
-            <Button variant="secondary">{t.roadmap}</Button>
+            <DownloadButton lang={lang} className="h-12" />
+            <a href="#multilingual" className="inline-flex h-12 items-center justify-center rounded-md border border-white/12 bg-white/8 px-5 text-sm font-medium text-white hover:bg-white/12">{lang === "zh" ? "了解多语言工作流" : "Explore multilingual workflow"}</a>
           </div>
         </div>
       </Section>

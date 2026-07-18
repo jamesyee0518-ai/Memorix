@@ -69,6 +69,16 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<MobileDevice> MobileDevices => Set<MobileDevice>();
     public DbSet<PushNotification> PushNotifications => Set<PushNotification>();
     public DbSet<WorkspaceSetting> WorkspaceSettings => Set<WorkspaceSetting>();
+    public DbSet<Terminology> Terminology => Set<Terminology>();
+    public DbSet<ChunkLocalization> ChunkLocalizations => Set<ChunkLocalization>();
+    public DbSet<ChunkEnrichment> ChunkEnrichments => Set<ChunkEnrichment>();
+    public DbSet<MultilingualBatchJob> MultilingualBatchJobs => Set<MultilingualBatchJob>();
+    public DbSet<LocalInstallation> LocalInstallations => Set<LocalInstallation>();
+    public DbSet<LocalProfile> LocalProfiles => Set<LocalProfile>();
+    public DbSet<DeviceIdentity> DeviceIdentities => Set<DeviceIdentity>();
+    public DbSet<CloudAccountBinding> CloudAccountBindings => Set<CloudAccountBinding>();
+    public DbSet<WorkspaceBinding> WorkspaceBindings => Set<WorkspaceBinding>();
+    public DbSet<SyncInboxStaging> SyncInboxStaging => Set<SyncInboxStaging>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -134,6 +144,12 @@ public class AppDbContext : DbContext, IAppDbContext
         ConfigureMobileDevice(modelBuilder);
         ConfigurePushNotification(modelBuilder);
         ConfigureWorkspaceSetting(modelBuilder);
+        ConfigureTerminology(modelBuilder);
+        ConfigureChunkLocalization(modelBuilder);
+        ConfigureChunkEnrichment(modelBuilder);
+        ConfigureMultilingualBatchJob(modelBuilder);
+        ConfigureIdentityAndBindingFoundation(modelBuilder);
+        ConfigureSyncInboxStaging(modelBuilder);
     }
 
     /// <summary>
@@ -145,6 +161,422 @@ public class AppDbContext : DbContext, IAppDbContext
         await Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS vector", ct);
         await Database.ExecuteSqlRawAsync(
             "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding vector(2560)", ct);
+    }
+
+    /// <summary>
+    /// Adds the multilingual compatibility columns to databases created by older builds.
+    /// EnsureCreated only creates missing tables and does not evolve existing ones.
+    /// </summary>
+    public async Task EnsureMultilingualSetupAsync(CancellationToken ct = default)
+    {
+        if (Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            var statements = new[]
+            {
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title_original varchar(1000)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title_zh varchar(1000)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary_zh text",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS keywords_zh text",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_model varchar(100)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_prompt_version varchar(50)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localized_at timestamp with time zone",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_quality_score integer",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_quality_issues text",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS glossary_version varchar(64)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS primary_language varchar(20)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS language_distribution text",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_multilingual boolean NOT NULL DEFAULT false",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_strategy varchar(30) NOT NULL DEFAULT 'none'",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_level varchar(10) NOT NULL DEFAULT 'L1'",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS language_detect_status varchar(30) NOT NULL DEFAULT 'pending'",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS localization_status varchar(30) NOT NULL DEFAULT 'pending'",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS enrichment_status varchar(30) NOT NULL DEFAULT 'pending'",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS fulltext_index_status varchar(30) NOT NULL DEFAULT 'pending'",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash varchar(64)",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_original text NOT NULL DEFAULT ''",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_normalized text",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS detected_language varchar(20)",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS language_confidence numeric(6,5)",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS language_distribution text",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS content_type varchar(30) NOT NULL DEFAULT 'paragraph'",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS processing_route varchar(30) NOT NULL DEFAULT 'review'",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS localization_required boolean NOT NULL DEFAULT false",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS chunk_group_id uuid",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS parent_chunk_id uuid",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS paragraph_start integer",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS paragraph_end integer",
+                "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS bounding_box text"
+            };
+            foreach (var statement in statements)
+                await Database.ExecuteSqlRawAsync(statement, ct);
+        }
+        else if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            var documents = new Dictionary<string, string>
+            {
+                ["title_original"] = "TEXT", ["title_zh"] = "TEXT", ["summary_zh"] = "TEXT", ["keywords_zh"] = "TEXT",
+                ["localization_model"] = "TEXT", ["localization_prompt_version"] = "TEXT", ["localized_at"] = "TEXT",
+                ["localization_quality_score"] = "INTEGER", ["localization_quality_issues"] = "TEXT", ["glossary_version"] = "TEXT",
+                ["primary_language"] = "TEXT",
+                ["language_distribution"] = "TEXT", ["is_multilingual"] = "INTEGER NOT NULL DEFAULT 0",
+                ["localization_strategy"] = "TEXT NOT NULL DEFAULT 'none'", ["localization_level"] = "TEXT NOT NULL DEFAULT 'L1'",
+                ["language_detect_status"] = "TEXT NOT NULL DEFAULT 'pending'", ["localization_status"] = "TEXT NOT NULL DEFAULT 'pending'",
+                ["enrichment_status"] = "TEXT NOT NULL DEFAULT 'pending'", ["fulltext_index_status"] = "TEXT NOT NULL DEFAULT 'pending'",
+                ["content_hash"] = "TEXT"
+            };
+            var chunks = new Dictionary<string, string>
+            {
+                ["content_original"] = "TEXT NOT NULL DEFAULT ''", ["content_normalized"] = "TEXT",
+                ["detected_language"] = "TEXT", ["language_confidence"] = "REAL", ["language_distribution"] = "TEXT",
+                ["content_type"] = "TEXT NOT NULL DEFAULT 'paragraph'", ["processing_route"] = "TEXT NOT NULL DEFAULT 'review'",
+                ["localization_required"] = "INTEGER NOT NULL DEFAULT 0", ["chunk_group_id"] = "TEXT", ["parent_chunk_id"] = "TEXT",
+                ["paragraph_start"] = "INTEGER", ["paragraph_end"] = "INTEGER", ["bounding_box"] = "TEXT"
+            };
+            foreach (var column in documents)
+                await AddSqliteColumnIfMissingAsync("documents", column.Key, column.Value, ct);
+            foreach (var column in chunks)
+                await AddSqliteColumnIfMissingAsync("document_chunks", column.Key, column.Value, ct);
+
+            var embeddings = new Dictionary<string, string>
+            {
+                ["language_code"] = "TEXT NOT NULL DEFAULT 'und'",
+                ["embedding_type"] = "TEXT NOT NULL DEFAULT 'original'",
+                ["localization_id"] = "TEXT",
+                ["source_content_hash"] = "TEXT"
+            };
+            foreach (var column in embeddings)
+                await AddSqliteColumnIfMissingAsync("chunk_embeddings", column.Key, column.Value, ct);
+        }
+
+        await Database.ExecuteSqlRawAsync("UPDATE documents SET title_original = title WHERE title_original IS NULL", ct);
+        await Database.ExecuteSqlRawAsync("UPDATE documents SET primary_language = language WHERE primary_language IS NULL AND language IS NOT NULL", ct);
+        await Database.ExecuteSqlRawAsync("UPDATE document_chunks SET content_original = content WHERE content_original = ''", ct);
+        await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS ix_documents_primary_language ON documents(primary_language)", ct);
+        await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS ix_documents_language_detect_status ON documents(language_detect_status)", ct);
+        await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS ix_chunks_detected_language ON document_chunks(detected_language)", ct);
+        await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS ix_chunks_processing_route ON document_chunks(processing_route)", ct);
+        await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS ix_chunks_chunk_group_id ON document_chunks(chunk_group_id)", ct);
+        var terminologySql = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+            ? """
+            CREATE TABLE IF NOT EXISTS terminology (
+                id uuid PRIMARY KEY, user_id uuid NOT NULL, workspace_id uuid,
+                source_language TEXT NOT NULL,
+                source_term TEXT NOT NULL,
+                target_language TEXT NOT NULL,
+                target_term TEXT NOT NULL,
+                aliases TEXT,
+                domain TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                review_status TEXT NOT NULL DEFAULT 'approved',
+                version TEXT NOT NULL DEFAULT 'v1',
+                created_at timestamp with time zone NOT NULL,
+                updated_at timestamp with time zone NOT NULL
+            )
+            """
+            : """
+            CREATE TABLE IF NOT EXISTS terminology (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT,
+                source_language TEXT NOT NULL, source_term TEXT NOT NULL,
+                target_language TEXT NOT NULL, target_term TEXT NOT NULL,
+                aliases TEXT, domain TEXT, priority INTEGER NOT NULL DEFAULT 0,
+                review_status TEXT NOT NULL DEFAULT 'approved', version TEXT NOT NULL DEFAULT 'v1',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            """;
+        await Database.ExecuteSqlRawAsync(terminologySql, ct);
+        await Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS ix_terminology_user_pair ON terminology(user_id, source_term, target_term)", ct);
+
+        var localizationSql = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+            ? """
+              CREATE TABLE IF NOT EXISTS chunk_localizations (
+                id uuid PRIMARY KEY, chunk_id uuid NOT NULL, user_id uuid NOT NULL, workspace_id uuid,
+                language_code varchar(20) NOT NULL, heading_localized text, content_localized text NOT NULL,
+                translation_type varchar(30) NOT NULL, model varchar(100), prompt_version varchar(50) NOT NULL,
+                glossary_version varchar(64), quality_score integer, quality_issues text,
+                review_status varchar(30) NOT NULL, status varchar(30) NOT NULL,
+                source_content_hash varchar(128) NOT NULL, idempotency_key varchar(128) NOT NULL,
+                reviewed_at timestamp with time zone, created_at timestamp with time zone NOT NULL,
+                updated_at timestamp with time zone NOT NULL
+              )
+              """
+            : """
+              CREATE TABLE IF NOT EXISTS chunk_localizations (
+                id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL, user_id TEXT NOT NULL, workspace_id TEXT,
+                language_code TEXT NOT NULL, heading_localized TEXT, content_localized TEXT NOT NULL,
+                translation_type TEXT NOT NULL, model TEXT, prompt_version TEXT NOT NULL, glossary_version TEXT,
+                quality_score INTEGER, quality_issues TEXT, review_status TEXT NOT NULL, status TEXT NOT NULL,
+                source_content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+                reviewed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+              )
+              """;
+        await Database.ExecuteSqlRawAsync(localizationSql, ct);
+        await Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS ix_chunk_localizations_chunk_language ON chunk_localizations(chunk_id, language_code)", ct);
+        await Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS ix_chunk_localizations_idempotency ON chunk_localizations(idempotency_key)", ct);
+
+        var enrichmentSql = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+            ? """
+              CREATE TABLE IF NOT EXISTS chunk_enrichments (
+                id uuid PRIMARY KEY, chunk_id uuid NOT NULL, user_id uuid NOT NULL, localization_id uuid,
+                language_code varchar(20) NOT NULL, summary text, keywords text, entities text, facts text,
+                hypothetical_questions text, model varchar(100), prompt_version varchar(50),
+                source_content_hash varchar(128) NOT NULL, status varchar(30) NOT NULL,
+                created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL
+              )
+              """
+            : """
+              CREATE TABLE IF NOT EXISTS chunk_enrichments (
+                id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL, user_id TEXT NOT NULL, localization_id TEXT,
+                language_code TEXT NOT NULL, summary TEXT, keywords TEXT, entities TEXT, facts TEXT,
+                hypothetical_questions TEXT, model TEXT, prompt_version TEXT, source_content_hash TEXT NOT NULL,
+                status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+              )
+              """;
+        await Database.ExecuteSqlRawAsync(enrichmentSql, ct);
+        await Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS ix_chunk_enrichments_chunk_language ON chunk_enrichments(chunk_id, language_code)", ct);
+
+        if (Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await Database.ExecuteSqlRawAsync("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS language_code varchar(20) NOT NULL DEFAULT 'und'", ct);
+            await Database.ExecuteSqlRawAsync("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS embedding_type varchar(40) NOT NULL DEFAULT 'original'", ct);
+            await Database.ExecuteSqlRawAsync("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS localization_id uuid", ct);
+            await Database.ExecuteSqlRawAsync("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS source_content_hash varchar(128)", ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS multilingual_batch_jobs (
+                    id uuid PRIMARY KEY, user_id uuid NOT NULL, document_id uuid NOT NULL,
+                    job_type varchar(30) NOT NULL, status varchar(30) NOT NULL, force boolean NOT NULL DEFAULT false,
+                    max_chunks integer NOT NULL DEFAULT 500, total_items integer NOT NULL DEFAULT 0,
+                    processed_items integer NOT NULL DEFAULT 0, succeeded_items integer NOT NULL DEFAULT 0,
+                    failed_items integer NOT NULL DEFAULT 0, current_chunk_id uuid, error_message text,
+                    retry_count integer NOT NULL DEFAULT 0, started_at timestamp with time zone,
+                    finished_at timestamp with time zone, created_at timestamp with time zone NOT NULL,
+                    updated_at timestamp with time zone NOT NULL)
+                """, ct);
+        }
+        else if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS multilingual_batch_jobs (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, document_id TEXT NOT NULL,
+                    job_type TEXT NOT NULL, status TEXT NOT NULL, force INTEGER NOT NULL DEFAULT 0,
+                    max_chunks INTEGER NOT NULL DEFAULT 500, total_items INTEGER NOT NULL DEFAULT 0,
+                    processed_items INTEGER NOT NULL DEFAULT 0, succeeded_items INTEGER NOT NULL DEFAULT 0,
+                    failed_items INTEGER NOT NULL DEFAULT 0, current_chunk_id TEXT, error_message TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0, started_at TEXT, finished_at TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_multilingual_jobs_user_status ON multilingual_batch_jobs(user_id, status, created_at)", ct);
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_multilingual_jobs_document_type ON multilingual_batch_jobs(document_id, job_type)", ct);
+        }
+    }
+
+    public async Task EnsureIdentityAndBindingSetupAsync(CancellationToken ct = default)
+    {
+        var isPostgres = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true;
+        if (isPostgres)
+        {
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role varchar(50) NOT NULL DEFAULT 'user'", ct);
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_users_role ON users(role)", ct);
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS sync_mode varchar(30) NOT NULL DEFAULT 'none'", ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS local_installations (
+                    id uuid PRIMARY KEY, installation_key varchar(100) NOT NULL UNIQUE,
+                    platform varchar(50) NOT NULL, device_name varchar(200) NOT NULL,
+                    app_version varchar(50) NOT NULL DEFAULT '', status varchar(30) NOT NULL DEFAULT 'active',
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS local_profiles (
+                    id uuid PRIMARY KEY, installation_id uuid NOT NULL, display_name varchar(200) NOT NULL,
+                    status varchar(30) NOT NULL DEFAULT 'active',
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS device_identities (
+                    id uuid PRIMARY KEY, installation_id uuid NOT NULL, device_key varchar(100) NOT NULL UNIQUE,
+                    public_key text NOT NULL, private_key_ref varchar(300) NOT NULL,
+                    key_algorithm varchar(30) NOT NULL,
+                    status varchar(30) NOT NULL DEFAULT 'active', last_seen_at timestamp with time zone,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE device_identities ADD COLUMN IF NOT EXISTS private_key_ref varchar(300) NOT NULL DEFAULT ''", ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS cloud_account_bindings (
+                    id uuid PRIMARY KEY, local_profile_id uuid NOT NULL, cloud_user_id varchar(200) NOT NULL,
+                    cloud_api_base_url varchar(2048) NOT NULL, account_display_name varchar(200),
+                    account_email_masked varchar(320), token_key_ref varchar(300) NOT NULL UNIQUE,
+                    binding_status varchar(30) NOT NULL DEFAULT 'active',
+                    last_authenticated_at timestamp with time zone,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL,
+                    UNIQUE(local_profile_id, cloud_api_base_url, cloud_user_id))
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS workspace_bindings (
+                    id uuid PRIMARY KEY, local_workspace_id uuid NOT NULL, cloud_account_binding_id uuid NOT NULL,
+                    cloud_workspace_id varchar(200) NOT NULL, sync_mode varchar(30) NOT NULL DEFAULT 'none',
+                    binding_status varchar(30) NOT NULL DEFAULT 'active', primary_device_id uuid,
+                    upload_original_files boolean NOT NULL DEFAULT false,
+                    conflict_policy varchar(30) NOT NULL DEFAULT 'manual', last_inbox_cursor text,
+                    last_sync_cursor text, last_sync_at timestamp with time zone,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL,
+                    UNIQUE(local_workspace_id, cloud_workspace_id))
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS sync_inbox_staging (
+                    id uuid PRIMARY KEY, workspace_id uuid NOT NULL, binding_id uuid,
+                    cloud_inbox_item_id varchar(300) NOT NULL, cloud_revision bigint,
+                    content_hash varchar(128), remote_metadata_json text,
+                    status varchar(30) NOT NULL DEFAULT 'discovered', local_inbox_item_id uuid,
+                    duplicate_document_id uuid, import_batch_id uuid, error_message varchar(2000),
+                    discovered_at timestamp with time zone NOT NULL, imported_at timestamp with time zone,
+                    updated_at timestamp with time zone NOT NULL,
+                    UNIQUE(workspace_id, cloud_inbox_item_id))
+                """, ct);
+        }
+        else if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            if (await SqliteTableExistsAsync("users", ct))
+            {
+                await AddSqliteColumnIfMissingAsync(
+                    "users", "role", "TEXT NOT NULL DEFAULT 'user'", ct);
+            }
+            await AddSqliteColumnIfMissingAsync(
+                "workspaces", "sync_mode", "TEXT NOT NULL DEFAULT 'none'", ct);
+            var statements = new[]
+            {
+                """
+                CREATE TABLE IF NOT EXISTS local_installations (
+                    id TEXT PRIMARY KEY, installation_key TEXT NOT NULL UNIQUE, platform TEXT NOT NULL,
+                    device_name TEXT NOT NULL, app_version TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS local_profiles (
+                    id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, display_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS device_identities (
+                    id TEXT PRIMARY KEY, installation_id TEXT NOT NULL, device_key TEXT NOT NULL UNIQUE,
+                    public_key TEXT NOT NULL, private_key_ref TEXT NOT NULL, key_algorithm TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    last_seen_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS cloud_account_bindings (
+                    id TEXT PRIMARY KEY, local_profile_id TEXT NOT NULL, cloud_user_id TEXT NOT NULL,
+                    cloud_api_base_url TEXT NOT NULL, account_display_name TEXT, account_email_masked TEXT,
+                    token_key_ref TEXT NOT NULL UNIQUE, binding_status TEXT NOT NULL DEFAULT 'active',
+                    last_authenticated_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(local_profile_id, cloud_api_base_url, cloud_user_id))
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS workspace_bindings (
+                    id TEXT PRIMARY KEY, local_workspace_id TEXT NOT NULL, cloud_account_binding_id TEXT NOT NULL,
+                    cloud_workspace_id TEXT NOT NULL, sync_mode TEXT NOT NULL DEFAULT 'none',
+                    binding_status TEXT NOT NULL DEFAULT 'active', primary_device_id TEXT,
+                    upload_original_files INTEGER NOT NULL DEFAULT 0,
+                    conflict_policy TEXT NOT NULL DEFAULT 'manual', last_inbox_cursor TEXT,
+                    last_sync_cursor TEXT, last_sync_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    UNIQUE(local_workspace_id, cloud_workspace_id))
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS sync_inbox_staging (
+                    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, binding_id TEXT,
+                    cloud_inbox_item_id TEXT NOT NULL, cloud_revision INTEGER, content_hash TEXT,
+                    remote_metadata_json TEXT, status TEXT NOT NULL DEFAULT 'discovered',
+                    local_inbox_item_id TEXT, duplicate_document_id TEXT, import_batch_id TEXT,
+                    error_message TEXT, discovered_at TEXT NOT NULL, imported_at TEXT,
+                    updated_at TEXT NOT NULL, UNIQUE(workspace_id, cloud_inbox_item_id))
+                """
+            };
+            foreach (var statement in statements)
+            {
+                await Database.ExecuteSqlRawAsync(statement, ct);
+            }
+            await AddSqliteColumnIfMissingAsync(
+                "device_identities", "private_key_ref", "TEXT NOT NULL DEFAULT ''", ct);
+        }
+
+        await Database.ExecuteSqlRawAsync(isPostgres
+            ? """
+              UPDATE workspaces
+              SET sync_mode = CASE
+                  WHEN inbox_enabled THEN 'inbox_only'
+                  WHEN sync_enabled THEN 'metadata'
+                  ELSE 'none'
+              END
+              WHERE sync_mode IS NULL OR sync_mode = ''
+                 OR (sync_mode = 'none' AND (inbox_enabled OR sync_enabled))
+              """
+            : """
+              UPDATE workspaces
+              SET sync_mode = CASE
+                  WHEN inbox_enabled = 1 THEN 'inbox_only'
+                  WHEN sync_enabled = 1 THEN 'metadata'
+                  ELSE 'none'
+              END
+              WHERE sync_mode IS NULL OR sync_mode = ''
+                 OR (sync_mode = 'none' AND (inbox_enabled = 1 OR sync_enabled = 1))
+              """, ct);
+
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_local_profiles_installation_status ON local_profiles(installation_id, status)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_workspace_bindings_account_status ON workspace_bindings(cloud_account_binding_id, binding_status)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_sync_inbox_staging_status ON sync_inbox_staging(workspace_id, status, discovered_at)", ct);
+    }
+
+    private async Task AddSqliteColumnIfMissingAsync(string table, string column, string definition, CancellationToken ct)
+    {
+        var connection = Database.GetDbConnection();
+        var closeWhenDone = connection.State != System.Data.ConnectionState.Open;
+        if (closeWhenDone) await connection.OpenAsync(ct);
+        try
+        {
+            await using var check = connection.CreateCommand();
+            check.CommandText = $"PRAGMA table_info({table})";
+            await using var reader = await check.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase)) return;
+            }
+            await reader.DisposeAsync();
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
+            await alter.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (closeWhenDone) await connection.CloseAsync();
+        }
+    }
+
+    private async Task<bool> SqliteTableExistsAsync(string table, CancellationToken ct)
+    {
+        var connection = Database.GetDbConnection();
+        var closeWhenDone = connection.State != System.Data.ConnectionState.Open;
+        if (closeWhenDone) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = $table";
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "$table";
+            parameter.Value = table;
+            command.Parameters.Add(parameter);
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct)) > 0;
+        }
+        finally
+        {
+            if (closeWhenDone) await connection.CloseAsync();
+        }
     }
 
     /// <summary>
@@ -241,12 +673,14 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(u => u.PasswordHash).IsRequired().HasMaxLength(255);
         e.Property(u => u.AvatarUrl).HasMaxLength(1024);
         e.Property(u => u.PlanCode).IsRequired().HasMaxLength(50);
+        e.Property(u => u.Role).IsRequired().HasMaxLength(50);
         e.Property(u => u.Status).IsRequired().HasMaxLength(50);
         e.Property(u => u.Timezone).IsRequired().HasMaxLength(64);
         e.Property(u => u.CreatedAt).IsRequired();
         e.Property(u => u.UpdatedAt).IsRequired();
 
         e.HasIndex(u => u.Email).IsUnique();
+        e.HasIndex(u => u.Role);
     }
 
     private static void ConfigureTopic(ModelBuilder modelBuilder)
@@ -348,6 +782,26 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(d => d.ContentMarkdown).HasColumnType("text");
         e.Property(d => d.ContentText).HasColumnType("text");
         e.Property(d => d.Language).HasMaxLength(20);
+        e.Property(d => d.TitleOriginal).HasColumnName("title_original").HasMaxLength(1000);
+        e.Property(d => d.TitleZh).HasColumnName("title_zh").HasMaxLength(1000);
+        e.Property(d => d.SummaryZh).HasColumnName("summary_zh").HasColumnType("text");
+        e.Property(d => d.KeywordsZh).HasColumnName("keywords_zh").HasColumnType("text");
+        e.Property(d => d.LocalizationModel).HasColumnName("localization_model").HasMaxLength(100);
+        e.Property(d => d.LocalizationPromptVersion).HasColumnName("localization_prompt_version").HasMaxLength(50);
+        e.Property(d => d.LocalizedAt).HasColumnName("localized_at");
+        e.Property(d => d.LocalizationQualityScore).HasColumnName("localization_quality_score");
+        e.Property(d => d.LocalizationQualityIssues).HasColumnName("localization_quality_issues").HasColumnType("text");
+        e.Property(d => d.GlossaryVersion).HasColumnName("glossary_version").HasMaxLength(64);
+        e.Property(d => d.PrimaryLanguage).HasColumnName("primary_language").HasMaxLength(20);
+        e.Property(d => d.LanguageDistribution).HasColumnName("language_distribution").HasColumnType("text");
+        e.Property(d => d.IsMultilingual).HasColumnName("is_multilingual").IsRequired().HasDefaultValue(false);
+        e.Property(d => d.LocalizationStrategy).HasColumnName("localization_strategy").IsRequired().HasMaxLength(30).HasDefaultValue("none");
+        e.Property(d => d.LocalizationLevel).HasColumnName("localization_level").IsRequired().HasMaxLength(10).HasDefaultValue("L1");
+        e.Property(d => d.LanguageDetectStatus).HasColumnName("language_detect_status").IsRequired().HasMaxLength(30).HasDefaultValue("pending");
+        e.Property(d => d.LocalizationStatus).HasColumnName("localization_status").IsRequired().HasMaxLength(30).HasDefaultValue("pending");
+        e.Property(d => d.EnrichmentStatus).HasColumnName("enrichment_status").IsRequired().HasMaxLength(30).HasDefaultValue("pending");
+        e.Property(d => d.FulltextIndexStatus).HasColumnName("fulltext_index_status").IsRequired().HasMaxLength(30).HasDefaultValue("pending");
+        e.Property(d => d.ContentHash).HasColumnName("content_hash").HasMaxLength(64);
         e.Property(d => d.Summary).HasColumnType("text");
         e.Property(d => d.OneSentenceConclusion).HasMaxLength(2000);
         // JSONB fields stored as text
@@ -401,8 +855,85 @@ public class AppDbContext : DbContext, IAppDbContext
         e.HasIndex(d => d.TagStatus);
         e.HasIndex(d => d.EntityStatus);
         e.HasIndex(d => d.EmbeddingStatus);
+        e.HasIndex(d => d.PrimaryLanguage);
+        e.HasIndex(d => d.LanguageDetectStatus);
+        e.HasIndex(d => d.LocalizationStatus);
         e.HasIndex(d => d.ValueScore);
         e.HasIndex(d => d.CreatedAt);
+    }
+
+    private static void ConfigureTerminology(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<Terminology>();
+        e.ToTable("terminology");
+        e.HasKey(t => t.Id);
+        e.Property(t => t.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(t => t.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(t => t.WorkspaceId).HasColumnName("workspace_id").HasColumnType("uuid");
+        e.Property(t => t.SourceLanguage).HasColumnName("source_language").IsRequired().HasMaxLength(20);
+        e.Property(t => t.SourceTerm).HasColumnName("source_term").IsRequired().HasMaxLength(300);
+        e.Property(t => t.TargetLanguage).HasColumnName("target_language").IsRequired().HasMaxLength(20);
+        e.Property(t => t.TargetTerm).HasColumnName("target_term").IsRequired().HasMaxLength(300);
+        e.Property(t => t.Aliases).HasColumnName("aliases").HasColumnType("text");
+        e.Property(t => t.Domain).HasColumnName("domain").HasMaxLength(100);
+        e.Property(t => t.Priority).HasColumnName("priority");
+        e.Property(t => t.ReviewStatus).HasColumnName("review_status").IsRequired().HasMaxLength(30);
+        e.Property(t => t.Version).HasColumnName("version").IsRequired().HasMaxLength(30);
+        e.Property(t => t.CreatedAt).HasColumnName("created_at");
+        e.Property(t => t.UpdatedAt).HasColumnName("updated_at");
+        e.HasIndex(t => new { t.UserId, t.SourceTerm, t.TargetTerm }).IsUnique();
+        e.HasIndex(t => new { t.UserId, t.Priority });
+    }
+
+    private static void ConfigureChunkLocalization(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ChunkLocalization>();
+        e.ToTable("chunk_localizations"); e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid"); e.Property(x => x.ChunkId).HasColumnName("chunk_id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid"); e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").HasColumnType("uuid");
+        e.Property(x => x.LanguageCode).HasColumnName("language_code").IsRequired().HasMaxLength(20);
+        e.Property(x => x.HeadingLocalized).HasColumnName("heading_localized").HasColumnType("text"); e.Property(x => x.ContentLocalized).HasColumnName("content_localized").IsRequired().HasColumnType("text");
+        e.Property(x => x.TranslationType).HasColumnName("translation_type").IsRequired().HasMaxLength(30); e.Property(x => x.Model).HasColumnName("model").HasMaxLength(100);
+        e.Property(x => x.PromptVersion).HasColumnName("prompt_version").IsRequired().HasMaxLength(50); e.Property(x => x.GlossaryVersion).HasColumnName("glossary_version").HasMaxLength(64);
+        e.Property(x => x.QualityScore).HasColumnName("quality_score"); e.Property(x => x.QualityIssues).HasColumnName("quality_issues").HasColumnType("text"); e.Property(x => x.ReviewStatus).HasColumnName("review_status").IsRequired().HasMaxLength(30);
+        e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(30); e.Property(x => x.SourceContentHash).HasColumnName("source_content_hash").IsRequired().HasMaxLength(128);
+        e.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(128);
+        e.Property(x => x.ReviewedAt).HasColumnName("reviewed_at"); e.Property(x => x.CreatedAt).HasColumnName("created_at"); e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        e.HasIndex(x => new { x.ChunkId, x.LanguageCode }).IsUnique(); e.HasIndex(x => x.IdempotencyKey).IsUnique();
+        e.HasIndex(x => new { x.UserId, x.Status });
+    }
+
+    private static void ConfigureChunkEnrichment(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ChunkEnrichment>();
+        e.ToTable("chunk_enrichments"); e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid"); e.Property(x => x.ChunkId).HasColumnName("chunk_id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid"); e.Property(x => x.LocalizationId).HasColumnName("localization_id").HasColumnType("uuid");
+        e.Property(x => x.LanguageCode).HasColumnName("language_code").IsRequired().HasMaxLength(20);
+        e.Property(x => x.Summary).HasColumnName("summary").HasColumnType("text"); e.Property(x => x.Keywords).HasColumnName("keywords").HasColumnType("text");
+        e.Property(x => x.Entities).HasColumnName("entities").HasColumnType("text"); e.Property(x => x.Facts).HasColumnName("facts").HasColumnType("text");
+        e.Property(x => x.HypotheticalQuestions).HasColumnName("hypothetical_questions").HasColumnType("text"); e.Property(x => x.Model).HasColumnName("model").HasMaxLength(100);
+        e.Property(x => x.PromptVersion).HasColumnName("prompt_version").HasMaxLength(50); e.Property(x => x.SourceContentHash).HasColumnName("source_content_hash").IsRequired().HasMaxLength(128);
+        e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(30);
+        e.Property(x => x.CreatedAt).HasColumnName("created_at"); e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        e.HasIndex(x => new { x.ChunkId, x.LanguageCode }).IsUnique(); e.HasIndex(x => new { x.UserId, x.Status });
+    }
+
+    private static void ConfigureMultilingualBatchJob(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<MultilingualBatchJob>();
+        e.ToTable("multilingual_batch_jobs"); e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id"); e.Property(x => x.UserId).HasColumnName("user_id"); e.Property(x => x.DocumentId).HasColumnName("document_id");
+        e.Property(x => x.JobType).HasColumnName("job_type").HasMaxLength(30).IsRequired();
+        e.Property(x => x.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+        e.Property(x => x.Force).HasColumnName("force"); e.Property(x => x.MaxChunks).HasColumnName("max_chunks");
+        e.Property(x => x.TotalItems).HasColumnName("total_items"); e.Property(x => x.ProcessedItems).HasColumnName("processed_items");
+        e.Property(x => x.SucceededItems).HasColumnName("succeeded_items"); e.Property(x => x.FailedItems).HasColumnName("failed_items");
+        e.Property(x => x.CurrentChunkId).HasColumnName("current_chunk_id"); e.Property(x => x.ErrorMessage).HasColumnName("error_message").HasColumnType("text");
+        e.Property(x => x.RetryCount).HasColumnName("retry_count"); e.Property(x => x.StartedAt).HasColumnName("started_at");
+        e.Property(x => x.FinishedAt).HasColumnName("finished_at"); e.Property(x => x.CreatedAt).HasColumnName("created_at"); e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+        e.HasIndex(x => new { x.UserId, x.Status, x.CreatedAt });
+        e.HasIndex(x => new { x.DocumentId, x.JobType });
     }
 
     private static void ConfigureDocumentChunk(ModelBuilder modelBuilder)
@@ -419,6 +950,19 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(c => c.ChunkTitle).HasMaxLength(500);
         e.Property(c => c.Content).IsRequired().HasColumnType("text");
         e.Property(c => c.ContentMarkdown).HasColumnType("text");
+        e.Property(c => c.ContentOriginal).HasColumnName("content_original").IsRequired().HasColumnType("text");
+        e.Property(c => c.ContentNormalized).HasColumnName("content_normalized").HasColumnType("text");
+        e.Property(c => c.DetectedLanguage).HasColumnName("detected_language").HasMaxLength(20);
+        e.Property(c => c.LanguageConfidence).HasColumnName("language_confidence").HasPrecision(6, 5);
+        e.Property(c => c.LanguageDistribution).HasColumnName("language_distribution").HasColumnType("text");
+        e.Property(c => c.ContentType).HasColumnName("content_type").IsRequired().HasMaxLength(30).HasDefaultValue("paragraph");
+        e.Property(c => c.ProcessingRoute).HasColumnName("processing_route").IsRequired().HasMaxLength(30).HasDefaultValue("review");
+        e.Property(c => c.LocalizationRequired).HasColumnName("localization_required").IsRequired().HasDefaultValue(false);
+        e.Property(c => c.ChunkGroupId).HasColumnName("chunk_group_id").HasColumnType("uuid");
+        e.Property(c => c.ParentChunkId).HasColumnName("parent_chunk_id").HasColumnType("uuid");
+        e.Property(c => c.ParagraphStart).HasColumnName("paragraph_start");
+        e.Property(c => c.ParagraphEnd).HasColumnName("paragraph_end");
+        e.Property(c => c.BoundingBox).HasColumnName("bounding_box").HasColumnType("text");
         e.Property(c => c.TokenCount);
         e.Property(c => c.CharCount);
         e.Property(c => c.StartOffset);
@@ -449,6 +993,9 @@ public class AppDbContext : DbContext, IAppDbContext
         e.HasIndex(c => new { c.UserId, c.TopicId });
         e.HasIndex(c => c.EmbeddingStatus);
         e.HasIndex(c => c.ContentHash);
+        e.HasIndex(c => c.DetectedLanguage);
+        e.HasIndex(c => c.ProcessingRoute);
+        e.HasIndex(c => c.ChunkGroupId);
     }
 
     private static void ConfigureTag(ModelBuilder modelBuilder)
@@ -943,13 +1490,17 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(ce => ce.EmbeddingJson).HasColumnType("text");
         e.Property(ce => ce.VectorRef).HasMaxLength(1000);
         e.Property(ce => ce.ChunkContentHash).HasMaxLength(128);
+        e.Property(ce => ce.LanguageCode).HasColumnName("language_code").IsRequired().HasMaxLength(20).HasDefaultValue("und");
+        e.Property(ce => ce.EmbeddingType).HasColumnName("embedding_type").IsRequired().HasMaxLength(40).HasDefaultValue("original");
+        e.Property(ce => ce.LocalizationId).HasColumnName("localization_id").HasColumnType("uuid");
+        e.Property(ce => ce.SourceContentHash).HasColumnName("source_content_hash").HasMaxLength(128);
         e.Property(ce => ce.Status).IsRequired().HasMaxLength(50).HasDefaultValue("pending");
         e.Property(ce => ce.ErrorMessage).HasColumnType("text");
         e.Property(ce => ce.RetryCount).IsRequired().HasDefaultValue(0);
         e.Property(ce => ce.CreatedAt).IsRequired();
         e.Property(ce => ce.UpdatedAt).IsRequired();
 
-        e.HasIndex(ce => new { ce.ChunkId, ce.Provider, ce.Model, ce.ChunkContentHash }).IsUnique();
+        e.HasIndex(ce => new { ce.ChunkId, ce.LanguageCode, ce.EmbeddingType, ce.Provider, ce.Model }).IsUnique();
         e.HasIndex(ce => ce.ChunkId);
         e.HasIndex(ce => new { ce.WorkspaceId, ce.Status });
     }
@@ -1143,12 +1694,99 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(w => w.LocalVaultPath).HasMaxLength(1024);
         e.Property(w => w.CloudApiBaseUrl).HasMaxLength(2048);
         e.Property(w => w.CloudWorkspaceId).HasMaxLength(200);
+        e.Property(w => w.SyncMode).IsRequired().HasMaxLength(30);
         e.Property(w => w.ModelConfig).HasColumnType("text");
         e.Property(w => w.CreatedAt).IsRequired();
         e.Property(w => w.UpdatedAt).IsRequired();
 
         e.HasIndex(w => w.UserId);
         e.HasIndex(w => w.Mode);
+        e.HasIndex(w => w.SyncMode);
+    }
+
+    private static void ConfigureIdentityAndBindingFoundation(ModelBuilder modelBuilder)
+    {
+        var installation = modelBuilder.Entity<LocalInstallation>();
+        installation.ToTable("local_installations");
+        installation.HasKey(x => x.Id);
+        installation.Property(x => x.Id).HasColumnType("uuid");
+        installation.Property(x => x.InstallationKey).IsRequired().HasMaxLength(100);
+        installation.Property(x => x.Platform).IsRequired().HasMaxLength(50);
+        installation.Property(x => x.DeviceName).IsRequired().HasMaxLength(200);
+        installation.Property(x => x.AppVersion).HasMaxLength(50);
+        installation.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        installation.HasIndex(x => x.InstallationKey).IsUnique();
+
+        var profile = modelBuilder.Entity<LocalProfile>();
+        profile.ToTable("local_profiles");
+        profile.HasKey(x => x.Id);
+        profile.Property(x => x.Id).HasColumnType("uuid");
+        profile.Property(x => x.InstallationId).HasColumnType("uuid");
+        profile.Property(x => x.DisplayName).IsRequired().HasMaxLength(200);
+        profile.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        profile.HasIndex(x => new { x.InstallationId, x.Status });
+
+        var device = modelBuilder.Entity<DeviceIdentity>();
+        device.ToTable("device_identities");
+        device.HasKey(x => x.Id);
+        device.Property(x => x.Id).HasColumnType("uuid");
+        device.Property(x => x.InstallationId).HasColumnType("uuid");
+        device.Property(x => x.DeviceKey).IsRequired().HasMaxLength(100);
+        device.Property(x => x.PublicKey).IsRequired().HasColumnType("text");
+        device.Property(x => x.PrivateKeyRef).IsRequired().HasMaxLength(300);
+        device.Property(x => x.KeyAlgorithm).IsRequired().HasMaxLength(30);
+        device.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        device.HasIndex(x => x.DeviceKey).IsUnique();
+
+        var account = modelBuilder.Entity<CloudAccountBinding>();
+        account.ToTable("cloud_account_bindings");
+        account.HasKey(x => x.Id);
+        account.Property(x => x.Id).HasColumnType("uuid");
+        account.Property(x => x.LocalProfileId).HasColumnType("uuid");
+        account.Property(x => x.CloudUserId).IsRequired().HasMaxLength(200);
+        account.Property(x => x.CloudApiBaseUrl).IsRequired().HasMaxLength(2048);
+        account.Property(x => x.AccountDisplayName).HasMaxLength(200);
+        account.Property(x => x.AccountEmailMasked).HasMaxLength(320);
+        account.Property(x => x.TokenKeyRef).IsRequired().HasMaxLength(300);
+        account.Property(x => x.BindingStatus).IsRequired().HasMaxLength(30);
+        account.HasIndex(x => new { x.LocalProfileId, x.CloudApiBaseUrl, x.CloudUserId }).IsUnique();
+        account.HasIndex(x => x.TokenKeyRef).IsUnique();
+
+        var binding = modelBuilder.Entity<WorkspaceBinding>();
+        binding.ToTable("workspace_bindings");
+        binding.HasKey(x => x.Id);
+        binding.Property(x => x.Id).HasColumnType("uuid");
+        binding.Property(x => x.LocalWorkspaceId).HasColumnType("uuid");
+        binding.Property(x => x.CloudAccountBindingId).HasColumnType("uuid");
+        binding.Property(x => x.CloudWorkspaceId).IsRequired().HasMaxLength(200);
+        binding.Property(x => x.SyncMode).IsRequired().HasMaxLength(30);
+        binding.Property(x => x.BindingStatus).IsRequired().HasMaxLength(30);
+        binding.Property(x => x.PrimaryDeviceId).HasColumnType("uuid");
+        binding.Property(x => x.ConflictPolicy).IsRequired().HasMaxLength(30);
+        binding.Property(x => x.LastInboxCursor).HasMaxLength(1000);
+        binding.Property(x => x.LastSyncCursor).HasMaxLength(1000);
+        binding.HasIndex(x => new { x.LocalWorkspaceId, x.CloudWorkspaceId }).IsUnique();
+        binding.HasIndex(x => new { x.CloudAccountBindingId, x.BindingStatus });
+    }
+
+    private static void ConfigureSyncInboxStaging(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<SyncInboxStaging>();
+        e.ToTable("sync_inbox_staging");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnType("uuid");
+        e.Property(x => x.BindingId).HasColumnType("uuid");
+        e.Property(x => x.CloudInboxItemId).IsRequired().HasMaxLength(300);
+        e.Property(x => x.ContentHash).HasMaxLength(128);
+        e.Property(x => x.RemoteMetadataJson).HasColumnType("text");
+        e.Property(x => x.Status).IsRequired().HasMaxLength(30);
+        e.Property(x => x.LocalInboxItemId).HasColumnType("uuid");
+        e.Property(x => x.DuplicateDocumentId).HasColumnType("uuid");
+        e.Property(x => x.ImportBatchId).HasColumnType("uuid");
+        e.Property(x => x.ErrorMessage).HasMaxLength(2000);
+        e.HasIndex(x => new { x.WorkspaceId, x.CloudInboxItemId }).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.Status, x.DiscoveredAt });
     }
 
     private static void ConfigureInboxItem(ModelBuilder modelBuilder)

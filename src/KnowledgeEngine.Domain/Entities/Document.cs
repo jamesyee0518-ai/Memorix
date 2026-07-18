@@ -11,6 +11,26 @@ public class Document
     public string? ContentMarkdown { get; set; }
     public string? ContentText { get; set; }
     public string? Language { get; set; }
+    public string? TitleOriginal { get; set; }
+    public string? TitleZh { get; set; }
+    public string? SummaryZh { get; set; }
+    public string? KeywordsZh { get; set; }
+    public string? PrimaryLanguage { get; set; }
+    public string? LanguageDistribution { get; set; }
+    public bool IsMultilingual { get; set; }
+    public string LocalizationStrategy { get; set; } = "none";
+    public string LocalizationLevel { get; set; } = "L1";
+    public string LanguageDetectStatus { get; set; } = "pending";
+    public string LocalizationStatus { get; set; } = "pending";
+    public string EnrichmentStatus { get; set; } = "pending";
+    public string FulltextIndexStatus { get; set; } = "pending";
+    public string? ContentHash { get; set; }
+    public string? LocalizationModel { get; set; }
+    public string? LocalizationPromptVersion { get; set; }
+    public DateTime? LocalizedAt { get; set; }
+    public int? LocalizationQualityScore { get; set; }
+    public string? LocalizationQualityIssues { get; set; }
+    public string? GlossaryVersion { get; set; }
     public int? WordCount { get; set; }
     public int? ReadingTimeMinutes { get; set; }
 

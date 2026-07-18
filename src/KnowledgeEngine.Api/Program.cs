@@ -1,7 +1,9 @@
 using System.Text;
+using System.Text.Json;
 using KnowledgeEngine.Application;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Settings;
+using KnowledgeEngine.Application.Security;
 using KnowledgeEngine.Domain.Entities;
 using KnowledgeEngine.Infrastructure;
 using KnowledgeEngine.Infrastructure.Db;
@@ -47,7 +49,11 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 // Controllers
-builder.Services.AddControllers();
+builder.Services.AddControllers().AddJsonOptions(options =>
+{
+    options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    options.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.CamelCase;
+});
 
 // Swagger/OpenAPI
 builder.Services.AddEndpointsApiExplorer();
@@ -100,7 +106,13 @@ builder.Services.AddAuthentication(options =>
         LocalAuthenticationHandler.SchemeName,
         _ => { });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(AuthorizationPolicies.PlatformAdmin, policy =>
+        policy.RequireRole(PlatformRoles.PlatformAdmin));
+    options.AddPolicy(AuthorizationPolicies.PlatformOperator, policy =>
+        policy.RequireRole(PlatformRoles.PlatformAdmin, PlatformRoles.Operator));
+});
 
 // CORS
 builder.Services.AddCors(options =>
@@ -123,6 +135,10 @@ using (var scope = app.Services.CreateScope())
     try
     {
         db.Database.EnsureCreated();
+        db.EnsureMultilingualSetupAsync().GetAwaiter().GetResult();
+        db.EnsureIdentityAndBindingSetupAsync().GetAwaiter().GetResult();
+        scope.ServiceProvider.GetRequiredService<IChineseFullTextIndexService>()
+            .EnsureCreatedAsync().GetAwaiter().GetResult();
         if (db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
         {
             // PostgreSQL deployments need provider-specific vector and compatibility setup.
@@ -146,6 +162,7 @@ using (var scope = app.Services.CreateScope())
                 Nickname = LocalUserConstants.Nickname,
                 PasswordHash = passwordHasher.HashPassword(Guid.NewGuid().ToString("N")),
                 PlanCode = "local",
+                Role = PlatformRoles.PlatformAdmin,
                 Status = "active",
                 Timezone = "Asia/Shanghai",
                 CreatedAt = now,
@@ -157,10 +174,21 @@ using (var scope = app.Services.CreateScope())
         {
             localUser.Nickname = LocalUserConstants.Nickname;
             localUser.PlanCode = "local";
+            localUser.Role = PlatformRoles.PlatformAdmin;
             localUser.Status = "active";
             localUser.UpdatedAt = DateTime.UtcNow;
             db.SaveChanges();
         }
+
+        if (db.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            db.Database.ExecuteSqlRaw(
+                "UPDATE workspaces SET user_id = {0} WHERE user_id IS NULL",
+                LocalUserConstants.UserId);
+        }
+
+        scope.ServiceProvider.GetRequiredService<ILocalIdentityService>()
+            .EnsureIdentityAsync().GetAwaiter().GetResult();
 
         if (app.Environment.IsDevelopment())
         {
@@ -176,6 +204,7 @@ using (var scope = app.Services.CreateScope())
                     Nickname = "测试用户",
                     PasswordHash = passwordHasher.HashPassword("12345678"),
                     PlanCode = "free",
+                    Role = PlatformRoles.User,
                     Status = "active",
                     Timezone = "Asia/Shanghai",
                     CreatedAt = now,
@@ -183,6 +212,19 @@ using (var scope = app.Services.CreateScope())
                 });
                 db.SaveChanges();
             }
+        }
+
+        var adminEmails = builder.Configuration.GetSection("Platform:AdminEmails").Get<string[]>() ?? [];
+        if (adminEmails.Length > 0)
+        {
+            var normalized = adminEmails.Select(x => x.Trim().ToLowerInvariant()).ToHashSet();
+            var admins = db.Users.Where(x => normalized.Contains(x.Email.ToLower())).ToList();
+            foreach (var admin in admins)
+            {
+                admin.Role = PlatformRoles.PlatformAdmin;
+                admin.UpdatedAt = DateTime.UtcNow;
+            }
+            db.SaveChanges();
         }
     }
     catch (Exception ex)

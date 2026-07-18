@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KnowledgeEngine.Application.Interfaces;
+using KnowledgeEngine.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace KnowledgeEngine.Application.Services;
@@ -24,6 +26,7 @@ public class CloudInboxSyncService
 {
     private readonly IKnowledgeRepository _repo;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IAppDbContext _db;
     private readonly ILogger<CloudInboxSyncService> _logger;
 
     // Cursor type used for inbox synchronization.
@@ -42,10 +45,12 @@ public class CloudInboxSyncService
     public CloudInboxSyncService(
         IKnowledgeRepository repo,
         IHttpClientFactory httpClientFactory,
+        IAppDbContext db,
         ILogger<CloudInboxSyncService> logger)
     {
         _repo = repo;
         _httpClientFactory = httpClientFactory;
+        _db = db;
         _logger = logger;
     }
 
@@ -77,6 +82,7 @@ public class CloudInboxSyncService
         string cloudApiBaseUrl,
         string cloudWorkspaceId,
         string authToken,
+        string retention = "keep",
         CancellationToken ct = default)
     {
         var result = new PullResult();
@@ -95,29 +101,68 @@ public class CloudInboxSyncService
             var client = CreateHttpClient(authToken);
             var url = BuildChangesUrl(cloudApiBaseUrl, cloudWorkspaceId, cursorValue, limit: 100);
             var response = await client.GetAsync(url, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                response.Dispose();
+                var legacyUrl = BuildLegacyChangesUrl(
+                    cloudApiBaseUrl, cursorValue, limit: 100);
+                _logger.LogWarning(
+                    "Workspace-scoped Cloud Inbox changes route was not found; falling back to legacy route {LegacyUrl}",
+                    legacyUrl);
+                response = await client.GetAsync(legacyUrl, ct);
+            }
+            using (response)
+            {
             response.EnsureSuccessStatusCode();
 
             // 3) Parse the response.
-            var pullResponse = await response.Content.ReadFromJsonAsync<CloudPullResponseDto>(JsonOptions, ct);
+            var pullResponse = await ReadProtocolPayloadAsync<CloudPullResponseDto>(
+                response.Content, ct);
             if (pullResponse == null)
             {
                 _logger.LogWarning("Cloud inbox pull returned empty body for workspace {WorkspaceId}", workspaceId);
                 return result;
             }
+            await ProcessPullResponseAsync(
+                pullResponse,
+                workspaceId,
+                cloudApiBaseUrl,
+                cloudWorkspaceId,
+                authToken,
+                retention,
+                client,
+                result,
+                ct);
+            }
 
-            // 4) Build a set of already-synced remote ids for duplicate detection.
-            //    The remote id is stored on the local item's origin_device_id
-            //    field with the "cloud:" prefix (see RemoteIdPrefix).
-            var existingItems = await _repo.ListInboxItemsAsync(
-                workspaceId, null, null, null, limit: 500, offset: 0, ct);
-            var syncedRemoteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var existing in existingItems)
+            _logger.LogInformation(
+                "Cloud inbox pull complete: workspace={WorkspaceId}, pulled={Pulled}, failed={Failed}, nextCursor={NextCursor}",
+                workspaceId, result.PulledCount, result.FailedCount, result.NextCursor ?? "(none)");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Cloud inbox pull failed for workspace {WorkspaceId}: {Message}", workspaceId, ex.Message);
+            throw;
+        }
+
+        return result;
+    }
+
+    private async Task ProcessPullResponseAsync(
+        CloudPullResponseDto pullResponse,
+        string workspaceId,
+        string cloudApiBaseUrl,
+        string cloudWorkspaceId,
+        string authToken,
+        string retention,
+        HttpClient client,
+        PullResult result,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParse(workspaceId, out var localWorkspaceId))
             {
-                if (!string.IsNullOrEmpty(existing.OriginDeviceId) &&
-                    existing.OriginDeviceId.StartsWith(RemoteIdPrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    syncedRemoteIds.Add(existing.OriginDeviceId[RemoteIdPrefix.Length..]);
-                }
+                throw new InvalidOperationException($"Invalid local workspace ID: {workspaceId}");
             }
 
             // 5) Process each remote item.
@@ -125,13 +170,56 @@ public class CloudInboxSyncService
             {
                 try
                 {
-                    // Skip duplicates: the remote id is already present locally.
-                    if (!string.IsNullOrEmpty(remote.Id) &&
-                        syncedRemoteIds.Contains(remote.Id))
+                    if (string.IsNullOrWhiteSpace(remote.Id))
+                    {
+                        throw new InvalidOperationException("Cloud inbox item is missing its stable ID.");
+                    }
+
+                    var staging = await _db.SyncInboxStaging.FirstOrDefaultAsync(x =>
+                        x.WorkspaceId == localWorkspaceId &&
+                        x.CloudInboxItemId == remote.Id, ct);
+                    if (staging?.Status == "imported")
                     {
                         _logger.LogDebug("Skipping duplicate cloud inbox item: remoteId={RemoteId}", remote.Id);
                         continue;
                     }
+
+                    if (staging?.Status == "local_imported")
+                    {
+                        await AcknowledgeAsync(
+                            client,
+                            cloudApiBaseUrl,
+                            cloudWorkspaceId,
+                            remote.Id,
+                            workspaceId,
+                            staging.LocalInboxItemId,
+                            retention,
+                            ct);
+                        staging.Status = "imported";
+                        staging.ErrorMessage = null;
+                        staging.UpdatedAt = DateTime.UtcNow;
+                        await _db.SaveChangesAsync(ct);
+                        continue;
+                    }
+
+                    var now = DateTime.UtcNow;
+                    var isNewStaging = staging == null;
+                    staging ??= new SyncInboxStaging
+                    {
+                        Id = Guid.CreateVersion7(),
+                        WorkspaceId = localWorkspaceId,
+                        CloudInboxItemId = remote.Id,
+                        DiscoveredAt = now
+                    };
+                    if (isNewStaging)
+                    {
+                        _db.SyncInboxStaging.Add(staging);
+                    }
+                    staging.RemoteMetadataJson = JsonSerializer.Serialize(remote);
+                    staging.Status = "importing";
+                    staging.ErrorMessage = null;
+                    staging.UpdatedAt = now;
+                    await _db.SaveChangesAsync(ct);
 
                     var created = await CreateLocalInboxItemAsync(workspaceId, remote, ct);
 
@@ -168,36 +256,67 @@ public class CloudInboxSyncService
                     });
                     await _repo.CreateInboxEventAsync(workspaceId, created.Id, "synced_from_cloud", payload, null, ct);
 
+                    staging.LocalInboxItemId = Guid.TryParse(created.Id, out var localInboxItemId)
+                        ? localInboxItemId
+                        : null;
+                    staging.Status = "local_imported";
+                    staging.ImportedAt = DateTime.UtcNow;
+                    staging.UpdatedAt = DateTime.UtcNow;
+                    await _db.SaveChangesAsync(ct);
+
+                    await AcknowledgeAsync(
+                        client,
+                        cloudApiBaseUrl,
+                        cloudWorkspaceId,
+                        remote.Id,
+                        workspaceId,
+                        staging.LocalInboxItemId,
+                        retention,
+                        ct);
+                    staging.Status = "imported";
+                    staging.UpdatedAt = DateTime.UtcNow;
+                    await _db.SaveChangesAsync(ct);
                     result.PulledCount++;
                 }
                 catch (Exception itemEx)
                 {
                     result.FailedCount++;
+                    if (!string.IsNullOrWhiteSpace(remote.Id))
+                    {
+                        var failedStaging = await _db.SyncInboxStaging.FirstOrDefaultAsync(x =>
+                            x.WorkspaceId == localWorkspaceId &&
+                            x.CloudInboxItemId == remote.Id, ct);
+                        if (failedStaging != null)
+                        {
+                            if (failedStaging.Status != "local_imported")
+                            {
+                                failedStaging.Status = "failed";
+                            }
+                            failedStaging.ErrorMessage = itemEx.Message;
+                            failedStaging.UpdatedAt = DateTime.UtcNow;
+                            await _db.SaveChangesAsync(CancellationToken.None);
+                        }
+                    }
                     _logger.LogError(itemEx,
                         "Failed to sync cloud inbox item remoteId={RemoteId}", remote.Id);
                 }
             }
 
-            // 7) Persist the new cursor (only when the server provided one).
-            if (!string.IsNullOrEmpty(pullResponse.NextCursor))
+            // 7) A cursor is a batch commit point. Never advance past a failed
+            // item; the server batch must remain replayable until all items are
+            // either imported or recognized as already imported.
+            if (result.FailedCount == 0 && !string.IsNullOrEmpty(pullResponse.NextCursor))
             {
                 await _repo.UpdateSyncCursorAsync(workspaceId, InboxCursorType, pullResponse.NextCursor, ct);
                 result.NextCursor = pullResponse.NextCursor;
             }
+            else if (result.FailedCount > 0)
+            {
+                _logger.LogWarning(
+                    "Cloud inbox cursor was not advanced because {FailedCount} item(s) failed",
+                    result.FailedCount);
+            }
 
-            _logger.LogInformation(
-                "Cloud inbox pull complete: workspace={WorkspaceId}, pulled={Pulled}, failed={Failed}, nextCursor={NextCursor}",
-                workspaceId, result.PulledCount, result.FailedCount, result.NextCursor ?? "(none)");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Cloud inbox pull failed for workspace {WorkspaceId}: {Message}", workspaceId, ex.Message);
-            // Re-throw so callers can react; the partial result is still populated.
-            throw;
-        }
-
-        return result;
     }
 
     /// <summary>
@@ -329,6 +448,19 @@ public class CloudInboxSyncService
         return url;
     }
 
+    private static string BuildLegacyChangesUrl(
+        string cloudApiBaseUrl,
+        string? cursor,
+        int limit)
+    {
+        var url = $"{cloudApiBaseUrl.TrimEnd('/')}/api/inbox/changes?limit={limit}";
+        if (!string.IsNullOrEmpty(cursor))
+        {
+            url += $"&cursor={Uri.EscapeDataString(cursor)}";
+        }
+        return url;
+    }
+
     /// <summary>
     /// Creates an HttpClient with the Bearer auth header pre-configured.
     /// </summary>
@@ -341,6 +473,107 @@ public class CloudInboxSyncService
                 new AuthenticationHeaderValue("Bearer", authToken);
         }
         return client;
+    }
+
+    private static async Task AcknowledgeAsync(
+        HttpClient client,
+        string cloudApiBaseUrl,
+        string cloudWorkspaceId,
+        string remoteItemId,
+        string localWorkspaceId,
+        Guid? localInboxItemId,
+        string retention,
+        CancellationToken ct)
+    {
+        var normalizedRetention = retention is "deleteOriginal" or "deleteAll"
+            ? retention
+            : "keep";
+        var baseUrl = cloudApiBaseUrl.TrimEnd('/');
+        var url =
+            $"{baseUrl}/api/workspaces/{Uri.EscapeDataString(cloudWorkspaceId)}/inbox/items/{Uri.EscapeDataString(remoteItemId)}/ack";
+        var idempotencyKey =
+            $"memorix:{localWorkspaceId}:{remoteItemId}:{normalizedRetention}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = JsonContent.Create(new
+            {
+                cloudWorkspaceId,
+                localWorkspaceId,
+                localInboxItemId,
+                result = "imported",
+                retention = normalizedRetention,
+                idempotencyKey
+            })
+        };
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+        var response = await client.SendAsync(request, ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            response.Dispose();
+            var legacyUrl =
+                $"{baseUrl}/v1/inbox/items/{Uri.EscapeDataString(remoteItemId)}/ack";
+            using var legacyRequest = new HttpRequestMessage(HttpMethod.Post, legacyUrl)
+            {
+                Content = JsonContent.Create(new
+                {
+                    cloudWorkspaceId,
+                    localWorkspaceId,
+                    localInboxItemId,
+                    result = "imported",
+                    retention = normalizedRetention,
+                    idempotencyKey
+                })
+            };
+            legacyRequest.Headers.TryAddWithoutValidation(
+                "Idempotency-Key", idempotencyKey);
+            response = await client.SendAsync(legacyRequest, ct);
+        }
+        using (response)
+        {
+            response.EnsureSuccessStatusCode();
+            var acknowledgement = await ReadProtocolPayloadAsync<AcknowledgementResponseDto>(
+                response.Content, ct);
+        if (acknowledgement?.Acknowledged != true)
+        {
+            throw new InvalidOperationException(
+                $"Cloud Inbox item {remoteItemId} was not acknowledged by the cloud service.");
+        }
+        if (normalizedRetention != "keep" &&
+            !string.Equals(acknowledgement.RetentionApplied, normalizedRetention,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cloud Inbox item {remoteItemId} did not confirm retention policy {normalizedRetention}.");
+        }
+        }
+    }
+
+    private static async Task<T?> ReadProtocolPayloadAsync<T>(
+        HttpContent content,
+        CancellationToken ct)
+    {
+        await using var stream = await content.ReadAsStreamAsync(ct);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("success", out var success))
+        {
+            if (success.ValueKind == JsonValueKind.False)
+            {
+                var message = root.TryGetProperty("error", out var error) &&
+                    error.TryGetProperty("message", out var errorMessage)
+                        ? errorMessage.GetString()
+                        : "Cloud service returned an unsuccessful response.";
+                throw new InvalidOperationException(message);
+            }
+            if (!root.TryGetProperty("data", out var data) ||
+                data.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                return default;
+            }
+            return data.Deserialize<T>(JsonOptions);
+        }
+        return root.Deserialize<T>(JsonOptions);
     }
 
     // ===== Response DTOs =====
@@ -399,5 +632,14 @@ public class CloudInboxSyncService
 
         [JsonPropertyName("expiresIn")]
         public int ExpiresIn { get; set; }
+    }
+
+    private sealed class AcknowledgementResponseDto
+    {
+        [JsonPropertyName("acknowledged")]
+        public bool Acknowledged { get; set; }
+
+        [JsonPropertyName("retentionApplied")]
+        public string? RetentionApplied { get; set; }
     }
 }

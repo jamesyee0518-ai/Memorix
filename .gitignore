@@ -25,6 +25,12 @@ desktop/src-tauri/gen/
 desktop/src-tauri/resources/api/
 desktop/src-tauri/resources/web/
 
+# Build artifacts
+artifacts/
+
+# Desktop embedded Node.js binary
+desktop/src-tauri/resources/node/
+
 # Local runtime data and secrets
 .env
 .env.*

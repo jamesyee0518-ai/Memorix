@@ -11,17 +11,23 @@ public class FileStorageService
     private readonly IFileStorageFactory _storageFactory;
     private readonly IAppDbContext _db;
     private readonly ICurrentUserContext _currentUser;
+    private readonly IConfigService _configService;
+    private readonly IWorkspaceAuthorizationService _workspaceAuthorization;
     private readonly ILogger<FileStorageService> _logger;
 
     public FileStorageService(
         IFileStorageFactory storageFactory,
         IAppDbContext db,
         ICurrentUserContext currentUser,
+        IConfigService configService,
+        IWorkspaceAuthorizationService workspaceAuthorization,
         ILogger<FileStorageService> logger)
     {
         _storageFactory = storageFactory;
         _db = db;
         _currentUser = currentUser;
+        _configService = configService;
+        _workspaceAuthorization = workspaceAuthorization;
         _logger = logger;
     }
 
@@ -31,7 +37,18 @@ public class FileStorageService
         {
             throw new UnauthorizedException("User is not authenticated");
         }
-        var userId = _currentUser.UserId.Value;
+        var workspaceIdValue = await _configService.GetCurrentWorkspaceIdAsync(ct);
+        if (!Guid.TryParse(workspaceIdValue, out var workspaceId))
+        {
+            throw new ValidationException(
+                "workspace", "An active workspace is required for file uploads.");
+        }
+        if (await _workspaceAuthorization.AuthorizeAsync(workspaceId, ct) !=
+            WorkspaceAccessResult.Allowed)
+        {
+            throw new UnauthorizedException(
+                "User is not authorized to upload files to the active workspace.");
+        }
 
         if (!contentType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) &&
             !fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
@@ -46,16 +63,17 @@ public class FileStorageService
 
         var fileId = Guid.NewGuid();
         var bucket = "knowledge-engine";
-        var objectKey = $"users/{userId}/files/{fileId}/original.pdf";
+        var objectKey = $"workspaces/{workspaceId}/files/{fileId}/original.pdf";
 
-        var storageProvider = await _storageFactory.GetProviderAsync(ct);
+        var storageProvider = await _storageFactory.GetProviderForWorkspaceAsync(
+            workspaceId.ToString(), ct);
         await storageProvider.UploadFileAsync(bucket, objectKey, stream, contentType, fileSize, ct);
 
         var now = DateTime.UtcNow;
         var fileObject = new Domain.Entities.FileObject
         {
             Id = fileId,
-            WorkspaceId = userId,
+            WorkspaceId = workspaceId,
             Bucket = bucket,
             ObjectKey = objectKey,
             OriginalFilename = fileName,
@@ -83,19 +101,16 @@ public class FileStorageService
 
     public async Task<ApiResponse<object>> GetDownloadUrlAsync(Guid fileId, CancellationToken ct = default)
     {
-        if (!_currentUser.IsAuthenticated || _currentUser.UserId == null)
-        {
-            throw new UnauthorizedException("User is not authenticated");
-        }
-        var userId = _currentUser.UserId.Value;
-
-        var fileObject = await _db.Files.FirstOrDefaultAsync(f => f.Id == fileId && f.WorkspaceId == userId, ct);
+        var fileObject = await _db.Files
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == fileId, ct);
         if (fileObject == null)
         {
             throw new NotFoundException("File", fileId);
         }
 
-        var storageProvider = await _storageFactory.GetProviderForWorkspaceAsync(userId.ToString(), ct);
+        var storageProvider = await _storageFactory.GetProviderForWorkspaceAsync(
+            fileObject.WorkspaceId.ToString(), ct);
         var url = await storageProvider.GetPresignedDownloadUrlAsync(fileObject.Bucket, fileObject.ObjectKey, 3600, ct);
 
         return ApiResponse<object>.Ok(new
@@ -107,9 +122,16 @@ public class FileStorageService
         });
     }
 
-    internal async Task<string> UploadFileInternalAsync(string bucket, string objectKey, Stream stream, string contentType, long fileSize, CancellationToken ct = default)
+    internal async Task<string> UploadFileInternalAsync(
+        string workspaceId,
+        string bucket,
+        string objectKey,
+        Stream stream,
+        string contentType,
+        long fileSize,
+        CancellationToken ct = default)
     {
-        var storageProvider = await _storageFactory.GetProviderAsync(ct);
+        var storageProvider = await _storageFactory.GetProviderForWorkspaceAsync(workspaceId, ct);
         await storageProvider.UploadFileAsync(bucket, objectKey, stream, contentType, fileSize, ct);
         return GetStorageProviderName(storageProvider);
     }

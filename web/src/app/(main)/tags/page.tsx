@@ -208,7 +208,9 @@ function TagFormDialog({ open, onOpenChange, tag }: TagFormDialogProps) {
               <Label htmlFor="tag-type">标签类型</Label>
               <Select value={type} onValueChange={(v) => setType(v as string)}>
                 <SelectTrigger id="tag-type" className="w-full">
-                  <SelectValue placeholder="选择类型" />
+                  <SelectValue placeholder="选择类型">
+                    {getTagTypeLabel(type)}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {TAG_TYPES.map((t) => (
@@ -360,7 +362,11 @@ export default function TagsPage() {
                 onValueChange={(v) => setTypeFilter(v as string)}
               >
                 <SelectTrigger size="sm" className="w-32">
-                  <SelectValue placeholder="类型筛选" />
+                  <SelectValue placeholder="类型筛选">
+                    {typeFilter === "all"
+                      ? "全部类型"
+                      : getTagTypeLabel(typeFilter)}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部类型</SelectItem>

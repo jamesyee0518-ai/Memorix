@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Domain.Entities;
@@ -16,6 +18,9 @@ public class DocumentPipeline : IDocumentPipeline
     private readonly IQualityScorer _qualityScorer;
     private readonly IProcessingLogService _logService;
     private readonly IJobQueue _jobQueue;
+    private readonly ILanguageDetectionService _languageDetection;
+    private readonly IChineseNormalizationService _chineseNormalization;
+    private readonly IL1LocalizationService _l1Localization;
     private readonly ILogger<DocumentPipeline> _logger;
 
     public DocumentPipeline(
@@ -26,6 +31,9 @@ public class DocumentPipeline : IDocumentPipeline
         IQualityScorer qualityScorer,
         IProcessingLogService logService,
         IJobQueue jobQueue,
+        ILanguageDetectionService languageDetection,
+        IChineseNormalizationService chineseNormalization,
+        IL1LocalizationService l1Localization,
         ILogger<DocumentPipeline> logger)
     {
         _db = db;
@@ -35,6 +43,9 @@ public class DocumentPipeline : IDocumentPipeline
         _qualityScorer = qualityScorer;
         _logService = logService;
         _jobQueue = jobQueue;
+        _languageDetection = languageDetection;
+        _chineseNormalization = chineseNormalization;
+        _l1Localization = l1Localization;
         _logger = logger;
     }
 
@@ -180,6 +191,7 @@ public class DocumentPipeline : IDocumentPipeline
             var normalizedText = cleanResult.CleanedText;
             var wordCount = CountWords(normalizedText);
             var readingTime = Math.Max(1, wordCount / 250);
+            var language = _languageDetection.Detect(normalizedText);
 
             // ================================================================
             // Step 3: Create or update Document record with P3 fields
@@ -210,11 +222,31 @@ public class DocumentPipeline : IDocumentPipeline
 
                 // Core content fields
                 document.ContentMarkdown = cleanResult.CleanedMarkdown;
-                document.ContentText = normalizedText;
+                document.ContentText = language.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                    ? _chineseNormalization.Normalize(normalizedText)
+                    : normalizedText;
                 document.Title = parseResult.Title ?? source.Title ?? document.Title;
+                document.TitleOriginal ??= document.Title;
+                document.TitleZh = language.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                    ? document.Title
+                    : document.TitleZh;
                 document.WordCount = wordCount;
                 document.ReadingTimeMinutes = readingTime;
-                document.Language = DetectLanguage(normalizedText);
+                document.Language = language.PrimaryLanguage;
+                document.PrimaryLanguage = language.PrimaryLanguage;
+                document.LanguageDistribution = language.DistributionJson;
+                document.IsMultilingual = language.IsMultilingual;
+                document.LocalizationStrategy = language.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                    ? "none"
+                    : "metadata_only";
+                document.LocalizationLevel = "L1";
+                document.LanguageDetectStatus = "done";
+                document.LocalizationStatus = language.PrimaryLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase)
+                    ? "not_required"
+                    : "pending";
+                document.EnrichmentStatus = "pending";
+                document.FulltextIndexStatus = "pending";
+                document.ContentHash = Sha256Hex(normalizedText);
 
                 // P3 source metadata fields
                 document.SourceType = source.SourceType;
@@ -398,6 +430,16 @@ public class DocumentPipeline : IDocumentPipeline
             aiJob.FinishedAt = DateTime.UtcNow;
 
             await _db.SaveChangesAsync(ct);
+
+            // L1 is metadata-only and must never turn a successfully ingested document into a failed import.
+            try
+            {
+                await _l1Localization.LocalizeDocumentAsync(document.Id, ct);
+            }
+            catch (Exception localizationEx)
+            {
+                _logger.LogWarning(localizationEx, "L1 localization failed for document {DocumentId}; original content remains searchable", document.Id);
+            }
 
             _logger.LogInformation("Document pipeline completed for source {SourceId}, document {DocumentId}",
                 sourceId, document.Id);
@@ -746,26 +788,8 @@ public class DocumentPipeline : IDocumentPipeline
         return cjkCount + latinWords.Length;
     }
 
-    private static string? DetectLanguage(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return null;
-
-        var cjkCount = 0;
-        foreach (char c in text)
-        {
-            if (c >= 0x4E00 && c <= 0x9FFF || c >= 0x3400 && c <= 0x4DBF)
-            {
-                cjkCount++;
-            }
-        }
-
-        if (cjkCount > text.Length * 0.1)
-        {
-            return "zh";
-        }
-
-        return "en";
-    }
+    private static string Sha256Hex(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 
     private static string SerializeList(List<string>? list)
     {

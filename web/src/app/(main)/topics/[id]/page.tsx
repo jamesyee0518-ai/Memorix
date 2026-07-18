@@ -14,6 +14,8 @@ import {
   ExternalLink,
   FileText,
   MoreVertical,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useTopicStore } from "@/stores/topic-store";
 import { sourceApi, ApiRequestError } from "@/lib/api";
@@ -33,7 +35,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -54,6 +55,30 @@ import {
 import { StatusBadge, getSourceTypeLabel } from "@/components/status-badge";
 import { ImportDialog } from "@/components/import-dialog";
 import { TopicFormDialog } from "@/components/topic-form-dialog";
+
+const PAGE_SIZE = 20;
+
+const SOURCE_STATUS_LABELS: Record<string, string> = {
+  all: "全部状态",
+  pending: "待处理",
+  queued: "队列中",
+  saved: "已保存",
+  done: "已完成",
+  failed: "失败",
+  archived: "已归档",
+};
+
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  all: "全部类型",
+  url: "URL",
+  text: "文本",
+  pdf: "PDF",
+  markdown: "Markdown",
+  word: "Word",
+  spreadsheet: "Excel",
+  csv: "CSV",
+  text_file: "文本文件",
+};
 
 function formatDate(dateStr: string): string {
   if (!dateStr) return "-";
@@ -79,6 +104,7 @@ export default function TopicDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -90,14 +116,20 @@ export default function TopicDetailPage() {
     }
   }, [topicId, fetchTopic]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, typeFilter]);
+
   // 获取资料列表（带筛选）
   const { data: sources, isLoading: sourcesLoading } = useQuery({
-    queryKey: ["sources", "topic", topicId, statusFilter, typeFilter],
+    queryKey: ["sources", "topic", topicId, statusFilter, typeFilter, page, PAGE_SIZE],
     queryFn: () =>
       sourceApi.list({
         topicId: topicId,
         status: statusFilter !== "all" ? (statusFilter as SourceStatus) : undefined,
         sourceType: typeFilter !== "all" ? (typeFilter as SourceType) : undefined,
+        page,
+        pageSize: PAGE_SIZE,
       }),
     enabled: !!topicId,
   });
@@ -134,6 +166,8 @@ export default function TopicDetailPage() {
   };
 
   const displaySources = sources?.items ?? [];
+  const totalSources = sources?.total ?? 0;
+  const totalPages = Math.max(1, sources?.totalPages ?? 1);
 
   return (
     <div className="space-y-6">
@@ -203,25 +237,30 @@ export default function TopicDetailPage() {
       {/* 资料列表 */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle>资料列表</CardTitle>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as string)}>
                 <SelectTrigger size="sm" className="w-32">
-                  <SelectValue placeholder="状态筛选" />
+                  <span className="flex-1 truncate text-left">
+                    {SOURCE_STATUS_LABELS[statusFilter] ?? "全部状态"}
+                  </span>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部状态</SelectItem>
                   <SelectItem value="pending">待处理</SelectItem>
                   <SelectItem value="queued">队列中</SelectItem>
                   <SelectItem value="saved">已保存</SelectItem>
+                  <SelectItem value="done">已完成</SelectItem>
                   <SelectItem value="failed">失败</SelectItem>
                   <SelectItem value="archived">已归档</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as string)}>
                 <SelectTrigger size="sm" className="w-32">
-                  <SelectValue placeholder="类型筛选" />
+                  <span className="flex-1 truncate text-left">
+                    {SOURCE_TYPE_LABELS[typeFilter] ?? "全部类型"}
+                  </span>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部类型</SelectItem>
@@ -251,7 +290,15 @@ export default function TopicDetailPage() {
               </p>
             </div>
           ) : (
-            <Table>
+            <Table className="min-w-[980px] table-fixed">
+              <colgroup>
+                <col className="w-[34%]" />
+                <col className="w-[12%]" />
+                <col className="w-[28%]" />
+                <col className="w-[10%]" />
+                <col className="w-[12%]" />
+                <col className="w-[4%]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>标题</TableHead>
@@ -265,46 +312,50 @@ export default function TopicDetailPage() {
               <TableBody>
                 {displaySources.map((source) => (
                   <TableRow key={source.id}>
-                    <TableCell className="max-w-xs">
+                    <TableCell className="min-w-0 align-top">
                       <a
                         href={`/sources/${source.id}`}
-                        className="truncate font-medium text-primary hover:underline"
+                        title={source.title || "未命名"}
+                        className="line-clamp-2 whitespace-normal break-words font-medium leading-5 text-primary hover:underline"
                       >
                         {source.title || "未命名"}
                       </a>
                       {source.status === "failed" && source.errorMessage && (
-                        <p className="mt-0.5 truncate text-xs text-destructive">
+                        <p className="mt-1 line-clamp-2 break-words text-xs text-destructive">
                           {source.errorMessage}
                         </p>
                       )}
                     </TableCell>
-                    <TableCell>{getSourceTypeLabel(source.sourceType)}</TableCell>
-                    <TableCell className="max-w-xs">
+                    <TableCell className="whitespace-normal break-words align-top">
+                      {getSourceTypeLabel(source.sourceType)}
+                    </TableCell>
+                    <TableCell className="min-w-0 align-top">
                       {source.sourceType === "url" && source.url ? (
                         <a
                           href={source.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center gap-1 truncate text-xs text-blue-600 hover:underline"
+                          title={source.url}
+                          className="flex min-w-0 items-center gap-1 text-xs text-blue-600 hover:underline"
                         >
                           <span className="truncate">{source.url}</span>
                           <ExternalLink className="size-3 shrink-0" />
                         </a>
                       ) : source.sourceType !== "text" ? (
-                        <span className="truncate text-xs text-muted-foreground">
+                        <span className="block truncate text-xs text-muted-foreground">
                           {getSourceTypeLabel(source.sourceType)} 文件
                         </span>
                       ) : (
                         <span className="text-xs text-muted-foreground">文本内容</span>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top">
                       <StatusBadge status={source.status} />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="whitespace-normal text-xs text-muted-foreground align-top">
                       {formatDate(source.createdAt)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top">
                       <DropdownMenu>
                         <DropdownMenuTrigger
                           render={
@@ -337,6 +388,34 @@ export default function TopicDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {!sourcesLoading && totalSources > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            共 {totalSources} 篇资料，第 {page} / {totalPages} 页
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              <ChevronLeft className="mr-1 size-4" />
+              上一页
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              下一页
+              <ChevronRight className="ml-1 size-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* 弹窗 */}
       <ImportDialog

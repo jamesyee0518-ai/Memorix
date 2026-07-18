@@ -4,7 +4,11 @@
   "description": "Default desktop capability for the main Memorix window",
   "windows": ["main"],
   "remote": {
-    "urls": ["http://localhost:3000/*", "http://127.0.0.1:3000/*"]
+    "urls": [
+      "http://localhost:3000/*",
+      "http://127.0.0.1:3000/*",
+      "http://127.0.0.1:*/*"
+    ]
   },
   "permissions": ["dialog:allow-open"]
 }

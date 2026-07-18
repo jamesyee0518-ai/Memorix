@@ -8,6 +8,7 @@ public class User
     public string PasswordHash { get; set; } = string.Empty;
     public string? AvatarUrl { get; set; }
     public string PlanCode { get; set; } = "free";
+    public string Role { get; set; } = "user";
     public string Status { get; set; } = "active";
     public string Timezone { get; set; } = "Asia/Shanghai";
     public DateTime? LastLoginAt { get; set; }

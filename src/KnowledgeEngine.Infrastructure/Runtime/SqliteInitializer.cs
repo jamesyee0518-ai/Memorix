@@ -119,6 +119,29 @@ public class SqliteInitializer
         await AddColumnIfNotExistsAsync(conn, "documents", "entity_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
         await AddColumnIfNotExistsAsync(conn, "documents", "embedding_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
 
+        // Multilingual processing foundation
+        await AddColumnIfNotExistsAsync(conn, "documents", "language", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "title_original", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "title_zh", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "summary_zh", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "keywords_zh", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_model", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_prompt_version", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localized_at", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_quality_score", "INTEGER", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_quality_issues", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "glossary_version", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "primary_language", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "language_distribution", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "is_multilingual", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_strategy", "TEXT NOT NULL DEFAULT 'none'", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_level", "TEXT NOT NULL DEFAULT 'L1'", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "language_detect_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "localization_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "enrichment_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "fulltext_index_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
+        await AddColumnIfNotExistsAsync(conn, "documents", "content_hash", "TEXT", ct);
+
         // Phase 4 migrations: document_chunks table new columns
         await AddColumnIfNotExistsAsync(conn, "document_chunks", "chunk_uid", "TEXT", ct);
         await AddColumnIfNotExistsAsync(conn, "document_chunks", "heading_path", "TEXT", ct);
@@ -127,6 +150,31 @@ public class SqliteInitializer
         await AddColumnIfNotExistsAsync(conn, "document_chunks", "prev_chunk_id", "TEXT", ct);
         await AddColumnIfNotExistsAsync(conn, "document_chunks", "next_chunk_id", "TEXT", ct);
         await AddColumnIfNotExistsAsync(conn, "document_chunks", "index_status", "TEXT NOT NULL DEFAULT 'pending'", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "content_original", "TEXT NOT NULL DEFAULT ''", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "content_normalized", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "detected_language", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "language_confidence", "REAL", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "language_distribution", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "content_type", "TEXT NOT NULL DEFAULT 'paragraph'", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "processing_route", "TEXT NOT NULL DEFAULT 'review'", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "localization_required", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "chunk_group_id", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "parent_chunk_id", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "paragraph_start", "INTEGER", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "paragraph_end", "INTEGER", ct);
+        await AddColumnIfNotExistsAsync(conn, "document_chunks", "bounding_box", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "chunk_embeddings", "language_code", "TEXT NOT NULL DEFAULT 'und'", ct);
+        await AddColumnIfNotExistsAsync(conn, "chunk_embeddings", "embedding_type", "TEXT NOT NULL DEFAULT 'original'", ct);
+        await AddColumnIfNotExistsAsync(conn, "chunk_embeddings", "localization_id", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "chunk_embeddings", "source_content_hash", "TEXT", ct);
+
+        await using (var backfill = conn.CreateCommand())
+        {
+            backfill.CommandText = @"UPDATE documents SET title_original = title WHERE title_original IS NULL;
+UPDATE documents SET primary_language = language WHERE primary_language IS NULL AND language IS NOT NULL;
+UPDATE document_chunks SET content_original = content WHERE content_original = '';";
+            await backfill.ExecuteNonQueryAsync(ct);
+        }
 
         // Phase 5 migrations: user_usage_daily Agent dimension columns
         await AddColumnIfNotExistsAsync(conn, "user_usage_daily", "agent_call_count", "INTEGER NOT NULL DEFAULT 0", ct);
@@ -148,6 +196,23 @@ public class SqliteInitializer
         // Phase 7 migrations: beta_users missing columns
         await AddColumnIfNotExistsAsync(conn, "beta_users", "beta_group", "TEXT", ct);
         await AddColumnIfNotExistsAsync(conn, "beta_users", "platform", "TEXT", ct);
+
+        // Identity, device, binding, and explicit sync-mode foundation.
+        await AddColumnIfNotExistsAsync(conn, "workspaces", "sync_mode", "TEXT NOT NULL DEFAULT 'none'", ct);
+        await AddColumnIfNotExistsAsync(conn, "device_identities", "private_key_ref", "TEXT NOT NULL DEFAULT ''", ct);
+        await using (var syncModeBackfill = conn.CreateCommand())
+        {
+            syncModeBackfill.CommandText = """
+                UPDATE workspaces
+                SET sync_mode = CASE
+                    WHEN inbox_enabled = 1 THEN 'inbox_only'
+                    WHEN sync_enabled = 1 THEN 'metadata'
+                    ELSE 'none'
+                END
+                WHERE sync_mode IS NULL OR sync_mode = '' OR sync_mode = 'none';
+                """;
+            await syncModeBackfill.ExecuteNonQueryAsync(ct);
+        }
 
         _logger.LogInformation("Phase 2 migrations completed");
         _logger.LogInformation("Phase 3 migrations completed");
@@ -220,6 +285,7 @@ public class SqliteInitializer
             cloud_workspace_id TEXT,
             sync_enabled INTEGER NOT NULL DEFAULT 0,
             inbox_enabled INTEGER NOT NULL DEFAULT 0,
+            sync_mode TEXT NOT NULL DEFAULT 'none',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
@@ -383,6 +449,90 @@ public class SqliteInitializer
         )",
         @"CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_cursor ON sync_cursors(workspace_id, remote_workspace_id, cursor_type)",
 
+        // ===== identity and workspace binding foundation =====
+        @"CREATE TABLE IF NOT EXISTS local_installations (
+            id TEXT PRIMARY KEY,
+            installation_key TEXT NOT NULL UNIQUE,
+            platform TEXT NOT NULL,
+            device_name TEXT NOT NULL,
+            app_version TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE TABLE IF NOT EXISTS local_profiles (
+            id TEXT PRIMARY KEY,
+            installation_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_local_profiles_installation_status ON local_profiles(installation_id, status)",
+        @"CREATE TABLE IF NOT EXISTS device_identities (
+            id TEXT PRIMARY KEY,
+            installation_id TEXT NOT NULL,
+            device_key TEXT NOT NULL UNIQUE,
+            public_key TEXT NOT NULL,
+            private_key_ref TEXT NOT NULL,
+            key_algorithm TEXT NOT NULL DEFAULT 'ed25519',
+            status TEXT NOT NULL DEFAULT 'active',
+            last_seen_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE TABLE IF NOT EXISTS cloud_account_bindings (
+            id TEXT PRIMARY KEY,
+            local_profile_id TEXT NOT NULL,
+            cloud_user_id TEXT NOT NULL,
+            cloud_api_base_url TEXT NOT NULL,
+            account_display_name TEXT,
+            account_email_masked TEXT,
+            token_key_ref TEXT NOT NULL UNIQUE,
+            binding_status TEXT NOT NULL DEFAULT 'active',
+            last_authenticated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(local_profile_id, cloud_api_base_url, cloud_user_id)
+        )",
+        @"CREATE TABLE IF NOT EXISTS workspace_bindings (
+            id TEXT PRIMARY KEY,
+            local_workspace_id TEXT NOT NULL,
+            cloud_account_binding_id TEXT NOT NULL,
+            cloud_workspace_id TEXT NOT NULL,
+            sync_mode TEXT NOT NULL DEFAULT 'none',
+            binding_status TEXT NOT NULL DEFAULT 'active',
+            primary_device_id TEXT,
+            upload_original_files INTEGER NOT NULL DEFAULT 0,
+            conflict_policy TEXT NOT NULL DEFAULT 'manual',
+            last_inbox_cursor TEXT,
+            last_sync_cursor TEXT,
+            last_sync_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(local_workspace_id, cloud_workspace_id)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_workspace_bindings_account_status ON workspace_bindings(cloud_account_binding_id, binding_status)",
+        @"CREATE TABLE IF NOT EXISTS sync_inbox_staging (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            binding_id TEXT,
+            cloud_inbox_item_id TEXT NOT NULL,
+            cloud_revision INTEGER,
+            content_hash TEXT,
+            remote_metadata_json TEXT,
+            status TEXT NOT NULL DEFAULT 'discovered',
+            local_inbox_item_id TEXT,
+            duplicate_document_id TEXT,
+            import_batch_id TEXT,
+            error_message TEXT,
+            discovered_at TEXT NOT NULL,
+            imported_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, cloud_inbox_item_id)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_sync_inbox_staging_status ON sync_inbox_staging(workspace_id, status, discovered_at)",
+
         // ===== cloud_inbox_sync_logs =====
         @"CREATE TABLE IF NOT EXISTS cloud_inbox_sync_logs (
             id TEXT PRIMARY KEY,
@@ -446,6 +596,27 @@ public class SqliteInitializer
             title TEXT NOT NULL,
             content_markdown TEXT,
             content_text TEXT,
+            language TEXT,
+            title_original TEXT,
+            title_zh TEXT,
+            summary_zh TEXT,
+            keywords_zh TEXT,
+            localization_model TEXT,
+            localization_prompt_version TEXT,
+            localized_at TEXT,
+            localization_quality_score INTEGER,
+            localization_quality_issues TEXT,
+            glossary_version TEXT,
+            primary_language TEXT,
+            language_distribution TEXT,
+            is_multilingual INTEGER NOT NULL DEFAULT 0,
+            localization_strategy TEXT NOT NULL DEFAULT 'none',
+            localization_level TEXT NOT NULL DEFAULT 'L1',
+            language_detect_status TEXT NOT NULL DEFAULT 'pending',
+            localization_status TEXT NOT NULL DEFAULT 'pending',
+            enrichment_status TEXT NOT NULL DEFAULT 'pending',
+            fulltext_index_status TEXT NOT NULL DEFAULT 'pending',
+            content_hash TEXT,
             summary TEXT,
             ai_status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL,
@@ -482,10 +653,68 @@ public class SqliteInitializer
             chunk_index INTEGER NOT NULL,
             chunk_title TEXT,
             content TEXT NOT NULL,
+            content_original TEXT NOT NULL DEFAULT '',
+            content_normalized TEXT,
+            detected_language TEXT,
+            language_confidence REAL,
+            language_distribution TEXT,
+            content_type TEXT NOT NULL DEFAULT 'paragraph',
+            processing_route TEXT NOT NULL DEFAULT 'review',
+            localization_required INTEGER NOT NULL DEFAULT 0,
+            chunk_group_id TEXT,
+            parent_chunk_id TEXT,
+            paragraph_start INTEGER,
+            paragraph_end INTEGER,
+            bounding_box TEXT,
             token_count INTEGER DEFAULT 0,
             char_count INTEGER DEFAULT 0
         )",
         @"CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON document_chunks(document_id)",
+
+        // ===== Multilingual terminology =====
+        @"CREATE TABLE IF NOT EXISTS terminology (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            workspace_id TEXT,
+            source_language TEXT NOT NULL,
+            source_term TEXT NOT NULL,
+            target_language TEXT NOT NULL,
+            target_term TEXT NOT NULL,
+            aliases TEXT,
+            domain TEXT,
+            priority INTEGER NOT NULL DEFAULT 0,
+            review_status TEXT NOT NULL DEFAULT 'approved',
+            version TEXT NOT NULL DEFAULT 'v1',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_terminology_user_pair ON terminology(user_id, source_term, target_term)",
+        @"CREATE TABLE IF NOT EXISTS chunk_localizations (
+            id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL, user_id TEXT NOT NULL, workspace_id TEXT,
+            language_code TEXT NOT NULL, heading_localized TEXT, content_localized TEXT NOT NULL,
+            translation_type TEXT NOT NULL, model TEXT, prompt_version TEXT NOT NULL, glossary_version TEXT,
+            quality_score INTEGER, quality_issues TEXT, review_status TEXT NOT NULL, status TEXT NOT NULL,
+            source_content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+            reviewed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_localizations_chunk_language ON chunk_localizations(chunk_id, language_code)",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_localizations_idempotency ON chunk_localizations(idempotency_key)",
+        @"CREATE TABLE IF NOT EXISTS chunk_enrichments (
+            id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL, user_id TEXT NOT NULL, localization_id TEXT,
+            language_code TEXT NOT NULL, summary TEXT, keywords TEXT, entities TEXT, facts TEXT,
+            hypothetical_questions TEXT, model TEXT, prompt_version TEXT, source_content_hash TEXT NOT NULL,
+            status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_chunk_enrichments_chunk_language ON chunk_enrichments(chunk_id, language_code)",
+        @"CREATE TABLE IF NOT EXISTS multilingual_batch_jobs (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL, document_id TEXT NOT NULL, job_type TEXT NOT NULL,
+            status TEXT NOT NULL, force INTEGER NOT NULL DEFAULT 0, max_chunks INTEGER NOT NULL DEFAULT 500,
+            total_items INTEGER NOT NULL DEFAULT 0, processed_items INTEGER NOT NULL DEFAULT 0,
+            succeeded_items INTEGER NOT NULL DEFAULT 0, failed_items INTEGER NOT NULL DEFAULT 0,
+            current_chunk_id TEXT, error_message TEXT, retry_count INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_multilingual_jobs_user_status ON multilingual_batch_jobs(user_id, status, created_at)",
 
         // ===== Phase 4 Tables =====
 
@@ -577,12 +806,16 @@ public class SqliteInitializer
             embedding_json TEXT,
             vector_ref TEXT,
             chunk_content_hash TEXT NOT NULL DEFAULT '',
+            language_code TEXT NOT NULL DEFAULT 'und',
+            embedding_type TEXT NOT NULL DEFAULT 'original',
+            localization_id TEXT,
+            source_content_hash TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             error_message TEXT,
             retry_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            UNIQUE(chunk_id, provider, model)
+            UNIQUE(chunk_id, language_code, embedding_type, provider, model)
         )",
         @"CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_chunk ON chunk_embeddings(chunk_id)",
         @"CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_status ON chunk_embeddings(workspace_id, status)",

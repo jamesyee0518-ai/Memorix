@@ -48,6 +48,7 @@ public class Workspace
     // Sync / Inbox
     public bool SyncEnabled { get; set; } = false;
     public bool InboxEnabled { get; set; } = false;
+    public string SyncMode { get; set; } = SyncModes.None;
 
     // Model config (JSON)
     public string? ModelConfig { get; set; }

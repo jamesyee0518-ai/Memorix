@@ -4,10 +4,11 @@ using KnowledgeEngine.Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using KnowledgeEngine.Application.Security;
 
 namespace KnowledgeEngine.Api.Controllers;
 
-[Authorize]
+[Authorize(Policy = AuthorizationPolicies.PlatformOperator)]
 [Route("api/beta-users")]
 public class BetaUserController : BaseController
 {

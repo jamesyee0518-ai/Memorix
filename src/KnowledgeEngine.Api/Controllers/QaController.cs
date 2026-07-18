@@ -60,6 +60,14 @@ public class QaController : BaseController
     [HttpPost("ask")]
     public async Task<IActionResult> Ask([FromBody] QaAskRequest request, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(request.Query))
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "INVALID_QUERY",
+                "Question cannot be empty",
+                GetTraceId()));
+        }
+
         var userId = _currentUser.UserId;
         if (userId == null)
         {
@@ -93,5 +101,23 @@ public class QaController : BaseController
         }
 
         return Ok(ApiResponse<List<QaMessageResponse>>.Ok(result.Data!, GetTraceId()));
+    }
+
+    [HttpDelete("sessions/{sessionId:guid}")]
+    public async Task<IActionResult> DeleteSession([FromRoute] Guid sessionId, CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await _qaService.DeleteSessionAsync(userId.Value, sessionId, ct);
+        if (!result.Success)
+        {
+            return Ok(ApiResponse<object>.Fail(result.Error!.Code, result.Error!.Message, GetTraceId()));
+        }
+
+        return Ok(ApiResponse<object>.Ok(result.Data!, GetTraceId()));
     }
 }

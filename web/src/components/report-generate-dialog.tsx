@@ -292,7 +292,9 @@ export function ReportGenerateDialog({
         onValueChange={(v) => onChange(v as string)}
       >
         <SelectTrigger className="w-full">
-          <SelectValue placeholder="请选择专题" />
+          <SelectValue placeholder="请选择专题">
+            {topics.find((topic) => topic.id === value)?.name ?? "请选择专题"}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {topics.map((t) => (
@@ -585,7 +587,13 @@ export function ReportGenerateDialog({
                     onValueChange={(v) => setReportDepth(v as string)}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue />
+                      <SelectValue>
+                        {reportDepth === "brief"
+                          ? "简要"
+                          : reportDepth === "deep"
+                            ? "深度"
+                            : "标准"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="brief">简要</SelectItem>
@@ -601,7 +609,9 @@ export function ReportGenerateDialog({
                     onValueChange={(v) => setLanguage(v as string)}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue />
+                      <SelectValue>
+                        {language === "en-US" ? "英文" : "中文"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="zh-CN">中文</SelectItem>
@@ -616,7 +626,9 @@ export function ReportGenerateDialog({
                     onValueChange={(v) => setTemplate(v as string)}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue />
+                      <SelectValue>
+                        {template === "default" ? "默认模板" : template}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="default">默认模板</SelectItem>

@@ -17,6 +17,7 @@ public class WorkspaceDto
     public string? CloudWorkspaceId { get; set; }
     public bool SyncEnabled { get; set; }
     public bool InboxEnabled { get; set; }
+    public string SyncMode { get; set; } = "none";
     public string? ModelConfig { get; set; }
     public Guid? UserId { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -37,6 +38,7 @@ public class CreateWorkspaceDto
     public string? CloudWorkspaceId { get; set; }
     public bool SyncEnabled { get; set; } = false;
     public bool InboxEnabled { get; set; } = false;
+    public string SyncMode { get; set; } = "none";
     public string? ModelConfig { get; set; }
 }
 
@@ -55,6 +57,7 @@ public class UpdateWorkspaceDto
     public string? ModelConfig { get; set; }
     public bool? SyncEnabled { get; set; }
     public bool? InboxEnabled { get; set; }
+    public string? SyncMode { get; set; }
     public string? LocalVaultPath { get; set; }
     public string? CloudApiBaseUrl { get; set; }
     public string? CloudWorkspaceId { get; set; }

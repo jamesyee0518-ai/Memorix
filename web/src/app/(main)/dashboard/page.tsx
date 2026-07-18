@@ -274,7 +274,14 @@ export default function DashboardPage() {
               <p className="text-sm text-muted-foreground">暂无资料，点击上方按钮导入</p>
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed min-w-[760px]">
+              <colgroup>
+                <col className="w-[46%]" />
+                <col className="w-[18%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[16%]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>标题</TableHead>
@@ -287,22 +294,30 @@ export default function DashboardPage() {
               <TableBody>
                 {displaySources.map((source) => (
                   <TableRow key={source.id}>
-                    <TableCell className="max-w-xs">
+                    <TableCell className="min-w-0 overflow-hidden">
                       <Link
                         href={`/sources/${source.id}`}
-                        className="truncate font-medium text-primary hover:underline"
+                        className="block truncate font-medium text-primary hover:underline"
+                        title={source.title || "未命名"}
                       >
                         {source.title || "未命名"}
                       </Link>
                     </TableCell>
-                    <TableCell>
-                      {topicMap.get(source.topicId ?? "") ?? "-"}
+                    <TableCell className="overflow-hidden">
+                      <span
+                        className="block truncate"
+                        title={topicMap.get(source.topicId ?? "") ?? "-"}
+                      >
+                        {topicMap.get(source.topicId ?? "") ?? "-"}
+                      </span>
                     </TableCell>
-                    <TableCell>{getSourceTypeLabel(source.sourceType)}</TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {getSourceTypeLabel(source.sourceType)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <StatusBadge status={source.status} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="whitespace-nowrap text-muted-foreground">
                       {formatDate(source.createdAt)}
                     </TableCell>
                   </TableRow>
@@ -331,7 +346,14 @@ export default function DashboardPage() {
               </p>
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed min-w-[760px]">
+              <colgroup>
+                <col className="w-[46%]" />
+                <col className="w-[18%]" />
+                <col className="w-[10%]" />
+                <col className="w-[12%]" />
+                <col className="w-[14%]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>标题</TableHead>
@@ -344,24 +366,30 @@ export default function DashboardPage() {
               <TableBody>
                 {displayDocuments.map((doc) => (
                   <TableRow key={doc.id}>
-                    <TableCell className="max-w-xs">
+                    <TableCell className="min-w-0 overflow-hidden">
                       <Link
                         href={`/documents/${doc.id}`}
-                        className="truncate font-medium text-primary hover:underline"
+                        className="block truncate font-medium text-primary hover:underline"
+                        title={doc.title || "未命名"}
                       >
                         {doc.title || "未命名"}
                       </Link>
                     </TableCell>
-                    <TableCell>
-                      {topicMap.get(doc.topicId ?? "") ?? "-"}
+                    <TableCell className="overflow-hidden">
+                      <span
+                        className="block truncate"
+                        title={topicMap.get(doc.topicId ?? "") ?? "-"}
+                      >
+                        {topicMap.get(doc.topicId ?? "") ?? "-"}
+                      </span>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <AiStatusBadge status={doc.aiStatus} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <ValueScoreBar score={doc.valueScore} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="whitespace-nowrap text-muted-foreground">
                       {formatDate(doc.createdAt)}
                     </TableCell>
                   </TableRow>
@@ -401,7 +429,14 @@ export default function DashboardPage() {
               </p>
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed min-w-[760px]">
+              <colgroup>
+                <col className="w-[40%]" />
+                <col className="w-[14%]" />
+                <col className="w-[20%]" />
+                <col className="w-[10%]" />
+                <col className="w-[16%]" />
+              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>标题</TableHead>
@@ -414,24 +449,30 @@ export default function DashboardPage() {
               <TableBody>
                 {displayReports.map((report) => (
                   <TableRow key={report.id}>
-                    <TableCell className="max-w-xs">
+                    <TableCell className="min-w-0 overflow-hidden">
                       <Link
                         href={`/reports/${report.id}`}
-                        className="truncate font-medium text-primary hover:underline"
+                        className="block truncate font-medium text-primary hover:underline"
+                        title={report.title || "未命名报告"}
                       >
                         {report.title || "未命名报告"}
                       </Link>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <ReportTypeBadge reportType={report.reportType} />
                     </TableCell>
-                    <TableCell>
-                      {topicMap.get(report.topicId ?? "") ?? "-"}
+                    <TableCell className="overflow-hidden">
+                      <span
+                        className="block truncate"
+                        title={topicMap.get(report.topicId ?? "") ?? "-"}
+                      >
+                        {topicMap.get(report.topicId ?? "") ?? "-"}
+                      </span>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       <ReportStatusBadge status={report.status} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="whitespace-nowrap text-muted-foreground">
                       {formatDate(report.createdAt)}
                     </TableCell>
                   </TableRow>

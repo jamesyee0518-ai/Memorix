@@ -7,6 +7,9 @@ public class DocumentListItem
     public Guid? TopicId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Summary { get; set; }
+    public string? TitleOriginal { get; set; }
+    public string? TitleZh { get; set; }
+    public string? SummaryZh { get; set; }
     public string AiStatus { get; set; } = "pending";
     public int? ValueScore { get; set; }
     public int? WordCount { get; set; }
@@ -25,6 +28,15 @@ public class DocumentListItem
     public string TagStatus { get; set; } = "pending";
     public string EntityStatus { get; set; } = "pending";
     public string EmbeddingStatus { get; set; } = "pending";
+    public string? PrimaryLanguage { get; set; }
+    public bool IsMultilingual { get; set; }
+    public string LocalizationLevel { get; set; } = "L1";
+    public string LanguageDetectStatus { get; set; } = "pending";
+    public string LocalizationStatus { get; set; } = "pending";
+    public DateTime? LocalizedAt { get; set; }
+    public int? LocalizationQualityScore { get; set; }
+    public string? LocalizationQualityIssues { get; set; }
+    public string? GlossaryVersion { get; set; }
 }
 
 public class DocumentDetail
@@ -38,6 +50,26 @@ public class DocumentDetail
     public string? ContentMarkdown { get; set; }
     public string? ContentText { get; set; }
     public string? Language { get; set; }
+    public string? TitleOriginal { get; set; }
+    public string? TitleZh { get; set; }
+    public string? SummaryZh { get; set; }
+    public string? KeywordsZh { get; set; }
+    public string? PrimaryLanguage { get; set; }
+    public string? LanguageDistribution { get; set; }
+    public bool IsMultilingual { get; set; }
+    public string LocalizationStrategy { get; set; } = "none";
+    public string LocalizationLevel { get; set; } = "L1";
+    public string LanguageDetectStatus { get; set; } = "pending";
+    public string LocalizationStatus { get; set; } = "pending";
+    public string EnrichmentStatus { get; set; } = "pending";
+    public string FulltextIndexStatus { get; set; } = "pending";
+    public string? ContentHash { get; set; }
+    public string? LocalizationModel { get; set; }
+    public string? LocalizationPromptVersion { get; set; }
+    public DateTime? LocalizedAt { get; set; }
+    public int? LocalizationQualityScore { get; set; }
+    public string? LocalizationQualityIssues { get; set; }
+    public string? GlossaryVersion { get; set; }
     public int? WordCount { get; set; }
     public int? ReadingTimeMinutes { get; set; }
 

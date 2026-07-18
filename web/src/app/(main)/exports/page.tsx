@@ -49,6 +49,14 @@ const targetTypeLabels: Record<string, string> = {
   search: "搜索结果",
 };
 
+const exportStatusLabels: Record<string, string> = {
+  all: "全部状态",
+  pending: "等待中",
+  processing: "导出中",
+  done: "已完成",
+  failed: "失败",
+};
+
 function formatDate(dateStr?: string): string {
   if (!dateStr) return "-";
   const d = new Date(dateStr);
@@ -120,7 +128,9 @@ export default function ExportsPage() {
               onValueChange={(v) => setStatusFilter(v as string)}
             >
               <SelectTrigger size="sm" className="w-32">
-                <SelectValue placeholder="状态筛选" />
+                <SelectValue placeholder="状态筛选">
+                  {exportStatusLabels[statusFilter] ?? "未知状态"}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部状态</SelectItem>
