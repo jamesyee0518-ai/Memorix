@@ -1,6 +1,7 @@
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace KnowledgeEngine.Infrastructure.Db;
 
@@ -382,6 +383,10 @@ public class AppDbContext : DbContext, IAppDbContext
                 "CREATE INDEX IF NOT EXISTS ix_users_role ON users(role)", ct);
             await Database.ExecuteSqlRawAsync(
                 "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS sync_mode varchar(30) NOT NULL DEFAULT 'none'", ct);
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS sync_enabled boolean NOT NULL DEFAULT false", ct);
+            await Database.ExecuteSqlRawAsync(
+                "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS inbox_enabled boolean NOT NULL DEFAULT false", ct);
             await Database.ExecuteSqlRawAsync("""
                 CREATE TABLE IF NOT EXISTS local_installations (
                     id uuid PRIMARY KEY, installation_key varchar(100) NOT NULL UNIQUE,
@@ -440,6 +445,9 @@ public class AppDbContext : DbContext, IAppDbContext
         }
         else if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
         {
+            var hasLegacySyncEnabled = await SqliteColumnExistsAsync("workspaces", "SyncEnabled", ct);
+            var hasLegacyInboxEnabled = await SqliteColumnExistsAsync("workspaces", "InboxEnabled", ct);
+            var hasLegacyUserId = await SqliteColumnExistsAsync("workspaces", "UserId", ct);
             if (await SqliteTableExistsAsync("users", ct))
             {
                 await AddSqliteColumnIfMissingAsync(
@@ -447,6 +455,27 @@ public class AppDbContext : DbContext, IAppDbContext
             }
             await AddSqliteColumnIfMissingAsync(
                 "workspaces", "sync_mode", "TEXT NOT NULL DEFAULT 'none'", ct);
+            await AddSqliteColumnIfMissingAsync(
+                "workspaces", "sync_enabled", "INTEGER NOT NULL DEFAULT 0", ct);
+            await AddSqliteColumnIfMissingAsync(
+                "workspaces", "inbox_enabled", "INTEGER NOT NULL DEFAULT 0", ct);
+            await AddSqliteColumnIfMissingAsync(
+                "workspaces", "user_id", "TEXT", ct);
+            if (hasLegacySyncEnabled)
+            {
+                await Database.ExecuteSqlRawAsync(
+                    "UPDATE workspaces SET sync_enabled = SyncEnabled", ct);
+            }
+            if (hasLegacyInboxEnabled)
+            {
+                await Database.ExecuteSqlRawAsync(
+                    "UPDATE workspaces SET inbox_enabled = InboxEnabled", ct);
+            }
+            if (hasLegacyUserId)
+            {
+                await Database.ExecuteSqlRawAsync(
+                    "UPDATE workspaces SET user_id = UserId WHERE user_id IS NULL", ct);
+            }
             var statements = new[]
             {
                 """
@@ -551,6 +580,28 @@ public class AppDbContext : DbContext, IAppDbContext
             await using var alter = connection.CreateCommand();
             alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
             await alter.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (closeWhenDone) await connection.CloseAsync();
+        }
+    }
+
+    private async Task<bool> SqliteColumnExistsAsync(string table, string column, CancellationToken ct)
+    {
+        var connection = Database.GetDbConnection();
+        var closeWhenDone = connection.State != System.Data.ConnectionState.Open;
+        if (closeWhenDone) await connection.OpenAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info({table})";
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.Ordinal)) return true;
+            }
+            return false;
         }
         finally
         {
@@ -1716,6 +1767,7 @@ public class AppDbContext : DbContext, IAppDbContext
         installation.Property(x => x.AppVersion).HasMaxLength(50);
         installation.Property(x => x.Status).IsRequired().HasMaxLength(30);
         installation.HasIndex(x => x.InstallationKey).IsUnique();
+        ConfigureSnakeCaseColumns(installation);
 
         var profile = modelBuilder.Entity<LocalProfile>();
         profile.ToTable("local_profiles");
@@ -1725,6 +1777,7 @@ public class AppDbContext : DbContext, IAppDbContext
         profile.Property(x => x.DisplayName).IsRequired().HasMaxLength(200);
         profile.Property(x => x.Status).IsRequired().HasMaxLength(30);
         profile.HasIndex(x => new { x.InstallationId, x.Status });
+        ConfigureSnakeCaseColumns(profile);
 
         var device = modelBuilder.Entity<DeviceIdentity>();
         device.ToTable("device_identities");
@@ -1737,6 +1790,7 @@ public class AppDbContext : DbContext, IAppDbContext
         device.Property(x => x.KeyAlgorithm).IsRequired().HasMaxLength(30);
         device.Property(x => x.Status).IsRequired().HasMaxLength(30);
         device.HasIndex(x => x.DeviceKey).IsUnique();
+        ConfigureSnakeCaseColumns(device);
 
         var account = modelBuilder.Entity<CloudAccountBinding>();
         account.ToTable("cloud_account_bindings");
@@ -1751,6 +1805,7 @@ public class AppDbContext : DbContext, IAppDbContext
         account.Property(x => x.BindingStatus).IsRequired().HasMaxLength(30);
         account.HasIndex(x => new { x.LocalProfileId, x.CloudApiBaseUrl, x.CloudUserId }).IsUnique();
         account.HasIndex(x => x.TokenKeyRef).IsUnique();
+        ConfigureSnakeCaseColumns(account);
 
         var binding = modelBuilder.Entity<WorkspaceBinding>();
         binding.ToTable("workspace_bindings");
@@ -1767,6 +1822,7 @@ public class AppDbContext : DbContext, IAppDbContext
         binding.Property(x => x.LastSyncCursor).HasMaxLength(1000);
         binding.HasIndex(x => new { x.LocalWorkspaceId, x.CloudWorkspaceId }).IsUnique();
         binding.HasIndex(x => new { x.CloudAccountBindingId, x.BindingStatus });
+        ConfigureSnakeCaseColumns(binding);
     }
 
     private static void ConfigureSyncInboxStaging(ModelBuilder modelBuilder)
@@ -1787,6 +1843,28 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(x => x.ErrorMessage).HasMaxLength(2000);
         e.HasIndex(x => new { x.WorkspaceId, x.CloudInboxItemId }).IsUnique();
         e.HasIndex(x => new { x.WorkspaceId, x.Status, x.DiscoveredAt });
+        ConfigureSnakeCaseColumns(e);
+    }
+
+    private static void ConfigureSnakeCaseColumns<TEntity>(EntityTypeBuilder<TEntity> builder)
+        where TEntity : class
+    {
+        foreach (var property in builder.Metadata.GetProperties())
+        {
+            property.SetColumnName(ToSnakeCase(property.Name));
+        }
+    }
+
+    private static string ToSnakeCase(string value)
+    {
+        var result = new System.Text.StringBuilder(value.Length + 8);
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (index > 0 && char.IsUpper(character)) result.Append('_');
+            result.Append(char.ToLowerInvariant(character));
+        }
+        return result.ToString();
     }
 
     private static void ConfigureInboxItem(ModelBuilder modelBuilder)

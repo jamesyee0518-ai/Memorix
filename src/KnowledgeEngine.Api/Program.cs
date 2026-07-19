@@ -72,6 +72,9 @@ builder.Services.AddSwaggerGen(c =>
 
 // Authentication: JWT for cloud accounts, local loopback identity for local-first desktop use.
 var key = Encoding.UTF8.GetBytes(jwtSettings.Secret);
+var enableLocalLoopbackAuthentication =
+    builder.Configuration.GetValue<bool?>("Authentication:EnableLocalLoopback")
+    ?? builder.Environment.IsDevelopment();
 builder.Services.AddAuthentication(options =>
     {
         options.DefaultAuthenticateScheme = "LocalOrJwt";
@@ -82,9 +85,14 @@ builder.Services.AddAuthentication(options =>
         options.ForwardDefaultSelector = context =>
         {
             var authorization = context.Request.Headers.Authorization.ToString();
-            return authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-                ? JwtBearerDefaults.AuthenticationScheme
-                : LocalAuthenticationHandler.SchemeName;
+            if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                return JwtBearerDefaults.AuthenticationScheme;
+            }
+
+            return enableLocalLoopbackAuthentication
+                ? LocalAuthenticationHandler.SchemeName
+                : JwtBearerDefaults.AuthenticationScheme;
         };
     })
     .AddJwtBearer(options =>
@@ -149,46 +157,49 @@ using (var scope = app.Services.CreateScope())
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<SystemReportTemplates>>();
         SystemReportTemplates.InitializeAsync(db, logger).GetAwaiter().GetResult();
 
-        var localUser = db.Users.FirstOrDefault(u =>
-            u.Id == LocalUserConstants.UserId || u.Email == LocalUserConstants.Email);
-        if (localUser == null)
+        if (enableLocalLoopbackAuthentication)
         {
-            var now = DateTime.UtcNow;
-            var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
-            db.Users.Add(new User
+            var localUser = db.Users.FirstOrDefault(u =>
+                u.Id == LocalUserConstants.UserId || u.Email == LocalUserConstants.Email);
+            if (localUser == null)
             {
-                Id = LocalUserConstants.UserId,
-                Email = LocalUserConstants.Email,
-                Nickname = LocalUserConstants.Nickname,
-                PasswordHash = passwordHasher.HashPassword(Guid.NewGuid().ToString("N")),
-                PlanCode = "local",
-                Role = PlatformRoles.PlatformAdmin,
-                Status = "active",
-                Timezone = "Asia/Shanghai",
-                CreatedAt = now,
-                UpdatedAt = now
-            });
-            db.SaveChanges();
-        }
-        else
-        {
-            localUser.Nickname = LocalUserConstants.Nickname;
-            localUser.PlanCode = "local";
-            localUser.Role = PlatformRoles.PlatformAdmin;
-            localUser.Status = "active";
-            localUser.UpdatedAt = DateTime.UtcNow;
-            db.SaveChanges();
-        }
+                var now = DateTime.UtcNow;
+                var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
+                db.Users.Add(new User
+                {
+                    Id = LocalUserConstants.UserId,
+                    Email = LocalUserConstants.Email,
+                    Nickname = LocalUserConstants.Nickname,
+                    PasswordHash = passwordHasher.HashPassword(Guid.NewGuid().ToString("N")),
+                    PlanCode = "local",
+                    Role = PlatformRoles.PlatformAdmin,
+                    Status = "active",
+                    Timezone = "Asia/Shanghai",
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+                db.SaveChanges();
+            }
+            else
+            {
+                localUser.Nickname = LocalUserConstants.Nickname;
+                localUser.PlanCode = "local";
+                localUser.Role = PlatformRoles.PlatformAdmin;
+                localUser.Status = "active";
+                localUser.UpdatedAt = DateTime.UtcNow;
+                db.SaveChanges();
+            }
 
-        if (db.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            db.Database.ExecuteSqlRaw(
-                "UPDATE workspaces SET user_id = {0} WHERE user_id IS NULL",
-                LocalUserConstants.UserId);
-        }
+            if (db.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                db.Database.ExecuteSqlRaw(
+                    "UPDATE workspaces SET user_id = {0} WHERE user_id IS NULL",
+                    LocalUserConstants.UserId);
+            }
 
-        scope.ServiceProvider.GetRequiredService<ILocalIdentityService>()
-            .EnsureIdentityAsync().GetAwaiter().GetResult();
+            scope.ServiceProvider.GetRequiredService<ILocalIdentityService>()
+                .EnsureIdentityAsync().GetAwaiter().GetResult();
+        }
 
         if (app.Environment.IsDevelopment())
         {

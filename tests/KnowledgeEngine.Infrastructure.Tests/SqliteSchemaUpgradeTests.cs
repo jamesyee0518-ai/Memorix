@@ -72,6 +72,65 @@ public class SqliteSchemaUpgradeTests
             connection, "SELECT sync_mode FROM workspaces WHERE id = 'ws-metadata'"));
     }
 
+    [Fact]
+    public async Task EnsureIdentityAndBindingSetupAsync_AddsMissingLegacySyncColumns()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await ExecuteAsync(connection, """
+            CREATE TABLE workspaces (id TEXT PRIMARY KEY);
+            INSERT INTO workspaces (id) VALUES ('ws-legacy');
+            """);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new AppDbContext(options);
+
+        await db.EnsureIdentityAndBindingSetupAsync();
+
+        Assert.True(await HasColumnAsync(connection, "workspaces", "sync_enabled"));
+        Assert.True(await HasColumnAsync(connection, "workspaces", "inbox_enabled"));
+        Assert.True(await HasColumnAsync(connection, "workspaces", "sync_mode"));
+        Assert.Equal("none", await ScalarAsync(
+            connection, "SELECT sync_mode FROM workspaces WHERE id = 'ws-legacy'"));
+    }
+
+    [Fact]
+    public async Task EnsureIdentityAndBindingSetupAsync_MigratesPascalCaseDesktopColumns()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await ExecuteAsync(connection, """
+            CREATE TABLE workspaces (
+                Id TEXT PRIMARY KEY,
+                SyncEnabled INTEGER NOT NULL DEFAULT 0,
+                InboxEnabled INTEGER NOT NULL DEFAULT 0,
+                UserId TEXT
+            );
+            INSERT INTO workspaces (Id, SyncEnabled, InboxEnabled, UserId)
+            VALUES ('ws-legacy', 1, 1, '00000000-0000-0000-0000-000000000123');
+            """);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new AppDbContext(options);
+
+        await db.EnsureIdentityAndBindingSetupAsync();
+
+        Assert.Equal("1", await ScalarAsync(
+            connection, "SELECT sync_enabled FROM workspaces WHERE Id = 'ws-legacy'"));
+        Assert.Equal("1", await ScalarAsync(
+            connection, "SELECT inbox_enabled FROM workspaces WHERE Id = 'ws-legacy'"));
+        Assert.Equal("inbox_only", await ScalarAsync(
+            connection, "SELECT sync_mode FROM workspaces WHERE Id = 'ws-legacy'"));
+        Assert.Equal("00000000-0000-0000-0000-000000000123", await ScalarAsync(
+            connection, "SELECT user_id FROM workspaces WHERE Id = 'ws-legacy'"));
+    }
+
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();

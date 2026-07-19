@@ -21,6 +21,15 @@ public class LocalAuthenticationHandler : AuthenticationHandler<AuthenticationSc
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        var configuration = Context.RequestServices.GetRequiredService<IConfiguration>();
+        var environment = Context.RequestServices.GetRequiredService<IHostEnvironment>();
+        var enabled = configuration.GetValue<bool?>("Authentication:EnableLocalLoopback")
+            ?? environment.IsDevelopment();
+        if (!enabled)
+        {
+            return Task.FromResult(AuthenticateResult.NoResult());
+        }
+
         var remoteIp = Context.Connection.RemoteIpAddress;
         if (remoteIp == null || !IPAddress.IsLoopback(remoteIp))
         {

@@ -7,7 +7,7 @@ namespace KnowledgeEngine.Infrastructure.Security;
 
 /// <summary>
 /// Persists secrets in the operating-system credential service. The secret is
-/// passed through stdin and is never placed in command-line arguments.
+/// is stored using the native credential provider for each platform.
 /// </summary>
 public sealed class PlatformCredentialStore : ICredentialStore
 {
@@ -19,8 +19,8 @@ public sealed class PlatformCredentialStore : ICredentialStore
         {
             await RunAsync(
                 "/usr/bin/security",
-                ["add-generic-password", "-U", "-s", ServiceName, "-a", keyRef, "-w"],
-                secret,
+                ["add-generic-password", "-U", "-s", ServiceName, "-a", keyRef, "-w", secret],
+                null,
                 ct);
             return;
         }
