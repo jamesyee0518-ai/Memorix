@@ -21,6 +21,7 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { API_BASE_URL } from "@/lib/api";
 import {
   Table,
   TableBody,
@@ -30,7 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const API_BASE = "http://127.0.0.1:9101/api";
+const API_BASE = API_BASE_URL;
 
 // 错误码表格数据
 const errorCodes = [

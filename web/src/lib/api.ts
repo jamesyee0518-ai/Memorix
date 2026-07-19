@@ -107,9 +107,10 @@ import type {
 const currentPort =
   typeof window !== "undefined" ? Number(window.location.port) : Number.NaN;
 const isDesktopPort = currentPort >= 43120 && currentPort <= 43218;
-const API_BASE_URL = isDesktopPort
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "");
+export const API_BASE_URL = isDesktopPort
   ? `http://127.0.0.1:${currentPort + 1}/api`
-  : "http://127.0.0.1:9101/api";
+  : configuredApiBaseUrl || "/api";
 export const API_ORIGIN = API_BASE_URL.replace(/\/api$/, "");
 const TOKEN_KEY = "access_token";
 
