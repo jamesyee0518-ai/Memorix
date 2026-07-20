@@ -1,5 +1,6 @@
 using System.Text.Json;
 using KnowledgeEngine.Application.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace KnowledgeEngine.Infrastructure.Runtime;
@@ -21,11 +22,14 @@ public class ConfigService : IConfigService
     private readonly ILogger<ConfigService> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    public ConfigService(ILogger<ConfigService> logger, ICurrentUserContext currentUser)
+    public ConfigService(
+        ILogger<ConfigService> logger,
+        ICurrentUserContext currentUser,
+        IConfiguration configuration)
     {
-        _configDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".knowledge-engine");
+        _configDir = configuration["ConfigDirectory"] ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".knowledge-engine");
         _currentUser = currentUser;
         _logger = logger;
     }

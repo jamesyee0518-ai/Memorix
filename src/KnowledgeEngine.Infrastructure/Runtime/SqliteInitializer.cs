@@ -199,6 +199,8 @@ UPDATE document_chunks SET content_original = content WHERE content_original = '
 
         // Identity, device, binding, and explicit sync-mode foundation.
         await AddColumnIfNotExistsAsync(conn, "workspaces", "sync_mode", "TEXT NOT NULL DEFAULT 'none'", ct);
+        await AddColumnIfNotExistsAsync(conn, "workspaces", "sync_enabled", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(conn, "workspaces", "inbox_enabled", "INTEGER NOT NULL DEFAULT 0", ct);
         await AddColumnIfNotExistsAsync(conn, "device_identities", "private_key_ref", "TEXT NOT NULL DEFAULT ''", ct);
         await using (var syncModeBackfill = conn.CreateCommand())
         {

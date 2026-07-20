@@ -194,7 +194,9 @@ fn start_production_sidecars(app: &tauri::AppHandle) -> Result<u16, Box<dyn std:
                 format!("http://127.0.0.1:{web_port}"),
             )
             .env("DatabaseProvider", "sqlite")
+            .env("Authentication__EnableLocalLoopback", "true")
             .env("AppDatabasePath", app_data_dir.join("memorix.db"))
+            .env("ConfigDirectory", app_data_dir.join("config"))
             .env("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false")
             .stdout(stdout)
             .stderr(stderr);

@@ -295,6 +295,50 @@ export default function AppLayout({
                 <DropdownMenuContent side="right" align="end" className="w-56"><DropdownMenuLabel>切换工作区</DropdownMenuLabel><DropdownMenuSeparator />{workspaces.map((ws) => <DropdownMenuItem key={ws.id} onClick={() => handleSwitchWorkspace(ws.id)}><span className="min-w-0 flex-1 truncate">{ws.name}</span>{ws.id === currentWorkspace.id && <span className="text-xs text-muted-foreground">当前</span>}</DropdownMenuItem>)}</DropdownMenuContent>
               </DropdownMenu>
             )}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    title={sidebarCollapsed ? displayName : undefined}
+                    className={cn(
+                      "flex min-h-11 w-full items-center rounded-md text-left hover:bg-black/5",
+                      sidebarCollapsed ? "justify-center" : "gap-2.5 px-2",
+                    )}
+                  />
+                }
+              >
+                <Avatar className="size-7 shrink-0">
+                  <AvatarFallback className="bg-black/10 text-xs text-[#4b4945]">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
+                {!sidebarCollapsed && (
+                  <>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{displayName}</div>
+                      <div className="truncate text-[11px] text-[#85817a]">{displayEmail}</div>
+                    </div>
+                    <ChevronsUpDown className="size-4 shrink-0 text-[#85817a]" />
+                  </>
+                )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="right" align="end" className="w-56">
+                <DropdownMenuLabel>
+                  <div className="flex flex-col">
+                    <span>{displayName}</span>
+                    <span className="truncate text-xs font-normal text-muted-foreground">
+                      {displayEmail}
+                    </span>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleLogout}>
+                  <LogOut className="mr-2 size-4" />
+                  {isLocalAnonymous ? "登录云端账号" : "退出登录"}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </aside>
 
