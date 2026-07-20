@@ -130,6 +130,7 @@ export default function AppLayout({
   useEffect(() => {
     const bootstrap = async () => {
       const token = getToken();
+      const desktop = "__TAURI_INTERNALS__" in window;
       if (token) {
         try {
           await init();
@@ -137,6 +138,12 @@ export default function AppLayout({
         } catch {
           router.replace("/login");
         }
+        return;
+      }
+
+      if (!desktop) {
+        setChecking(false);
+        router.replace("/login");
         return;
       }
 
@@ -155,7 +162,9 @@ export default function AppLayout({
 
     bootstrap().catch(() => {
       setChecking(false);
-      if (pathname !== "/setup") {
+      if (!("__TAURI_INTERNALS__" in window)) {
+        router.replace("/login");
+      } else if (pathname !== "/setup") {
         router.replace("/setup");
       }
     });
