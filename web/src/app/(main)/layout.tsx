@@ -73,7 +73,7 @@ const settingsSubItems = [
   { href: "/settings/workspace", label: "工作区", icon: Layers },
   { href: "/settings/model-config", label: "模型配置", icon: Cpu },
   { href: "/settings/terminology", label: "术语库", icon: Languages },
-  { href: "/settings/runtime", label: "运行时状态", icon: Activity },
+  { href: "/settings/runtime", label: "运行时状态", icon: Activity, adminOnly: true },
   { href: "/settings/api-keys", label: "API Key", icon: KeyRound },
   { href: "/settings/agents", label: "Agent 接入", icon: Bot },
   { href: "/settings/usage", label: "使用量", icon: BarChart3 },
@@ -473,7 +473,7 @@ export default function AppLayout({
                 {/* 设置子菜单 */}
                 {isSettings && settingsActive && (
                   <div className="ml-6 mt-1 space-y-0.5 border-l border-white/20 pl-3">
-                    {settingsSubItems.map((sub) => {
+                    {settingsSubItems.filter((sub) => !sub.adminOnly || user?.role === "platform_admin").map((sub) => {
                       const SubIcon = sub.icon;
                       const subActive = pathname === sub.href;
                       return (

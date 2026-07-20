@@ -18,13 +18,14 @@ import {
   Languages,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/stores/auth-store";
 
 const settingsNavItems = [
   { href: "/settings", label: "账户信息", icon: User, exact: true },
   { href: "/settings/workspace", label: "工作区", icon: Layers },
   { href: "/settings/model-config", label: "模型配置", icon: Cpu },
   { href: "/settings/terminology", label: "术语库", icon: Languages },
-  { href: "/settings/runtime", label: "运行时状态", icon: Activity },
+  { href: "/settings/runtime", label: "运行时状态", icon: Activity, adminOnly: true },
   { href: "/settings/api-keys", label: "API Key 管理", icon: KeyRound },
   { href: "/settings/agents", label: "Agent 接入", icon: Bot },
   { href: "/settings/usage", label: "使用量", icon: BarChart3 },
@@ -37,10 +38,11 @@ const settingsNavItems = [
 
 export function SettingsNav() {
   const pathname = usePathname();
+  const role = useAuthStore((state) => state.user?.role);
 
   return (
     <nav className="flex flex-wrap gap-1 border-b pb-3">
-      {settingsNavItems.map((item) => {
+      {settingsNavItems.filter((item) => !item.adminOnly || role === "platform_admin").map((item) => {
         const Icon = item.icon;
         const active = item.exact
           ? pathname === item.href
