@@ -6,6 +6,7 @@ using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace KnowledgeEngine.Infrastructure.Runtime;
 
@@ -14,19 +15,25 @@ public sealed class BindingService : IBindingService
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> RefreshLocks = new();
     private readonly IAppDbContext _db;
     private readonly ILocalIdentityService _identityService;
+    private readonly ICurrentUserContext _currentUser;
     private readonly ICredentialStore _credentialStore;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<BindingService> _logger;
 
     public BindingService(
         IAppDbContext db,
         ILocalIdentityService identityService,
+        ICurrentUserContext currentUser,
         ICredentialStore credentialStore,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        ILogger<BindingService> logger)
     {
         _db = db;
         _identityService = identityService;
+        _currentUser = currentUser;
         _credentialStore = credentialStore;
         _httpClientFactory = httpClientFactory;
+        _logger = logger;
     }
 
     public async Task<CloudAccountBindingDto> BindCloudAccountAsync(
@@ -82,6 +89,7 @@ public sealed class BindingService : IBindingService
             }, ct);
         }
         await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Cloud account binding {BindingId} connected.", binding.Id);
         return Map(binding);
     }
 
@@ -97,7 +105,9 @@ public sealed class BindingService : IBindingService
 
     public async Task UnbindCloudAccountAsync(Guid id, CancellationToken ct = default)
     {
-        var binding = await _db.CloudAccountBindings.FirstOrDefaultAsync(x => x.Id == id, ct)
+        var identity = await _identityService.EnsureIdentityAsync(ct);
+        var binding = await _db.CloudAccountBindings.FirstOrDefaultAsync(
+            x => x.Id == id && x.LocalProfileId == identity.LocalProfileId, ct)
             ?? throw new InvalidOperationException($"Cloud account binding {id} not found.");
         var activeWorkspaceBinding = await _db.WorkspaceBindings
             .AnyAsync(x => x.CloudAccountBindingId == id && x.BindingStatus == "active", ct);
@@ -110,6 +120,7 @@ public sealed class BindingService : IBindingService
         await _credentialStore.DeleteAsync(binding.TokenKeyRef, ct);
         await _credentialStore.DeleteAsync(AccessTokenKey(binding), ct);
         await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Cloud account binding {BindingId} revoked.", binding.Id);
     }
 
     public async Task<WorkspaceBindingDto> CreateWorkspaceBindingAsync(
@@ -122,12 +133,16 @@ public sealed class BindingService : IBindingService
         {
             throw new ArgumentException("Cloud workspace ID is required.");
         }
-        if (!await _db.Workspaces.AnyAsync(x => x.Id == input.LocalWorkspaceId, ct))
+        var identity = await _identityService.EnsureIdentityAsync(ct);
+        var localWorkspaceId = await GetAuthorizedWorkspaceIdAsync(input.LocalWorkspaceId, ct);
+        if (!localWorkspaceId.HasValue)
         {
             throw new InvalidOperationException($"Workspace {input.LocalWorkspaceId} not found.");
         }
         var account = await _db.CloudAccountBindings.FirstOrDefaultAsync(
-            x => x.Id == input.CloudAccountBindingId && x.BindingStatus == "active", ct)
+            x => x.Id == input.CloudAccountBindingId &&
+                 x.LocalProfileId == identity.LocalProfileId &&
+                 x.BindingStatus == "active", ct)
             ?? throw new InvalidOperationException("Active cloud account binding not found.");
 
         var existing = await _db.WorkspaceBindings.FirstOrDefaultAsync(x =>
@@ -154,9 +169,13 @@ public sealed class BindingService : IBindingService
         existing.ConflictPolicy = input.ConflictPolicy;
         existing.UpdatedAt = now;
 
-        var workspace = await _db.Workspaces.FirstAsync(x => x.Id == input.LocalWorkspaceId, ct);
+        var workspace = await _db.Workspaces.FirstAsync(x => x.Id == localWorkspaceId.Value, ct);
         ApplyCompatibilityFlags(workspace, existing.SyncMode, account, existing.CloudWorkspaceId);
         await _db.SaveChangesAsync(ct);
+        _logger.LogInformation(
+            "Workspace {WorkspaceId} bound to cloud workspace {CloudWorkspaceId}.",
+            workspace.Id,
+            existing.CloudWorkspaceId);
         return Map(existing);
     }
 
@@ -164,7 +183,13 @@ public sealed class BindingService : IBindingService
         Guid? workspaceId = null,
         CancellationToken ct = default)
     {
-        var query = _db.WorkspaceBindings.AsQueryable();
+        var userId = _currentUser.UserId;
+        if (!userId.HasValue) return [];
+        var ownedWorkspaceIds = _db.Workspaces
+            .Where(x => x.UserId == userId.Value)
+            .Select(x => x.Id);
+        var query = _db.WorkspaceBindings
+            .Where(x => ownedWorkspaceIds.Contains(x.LocalWorkspaceId));
         if (workspaceId.HasValue)
         {
             query = query.Where(x => x.LocalWorkspaceId == workspaceId.Value);
@@ -179,7 +204,7 @@ public sealed class BindingService : IBindingService
         UpdateWorkspaceBindingDto input,
         CancellationToken ct = default)
     {
-        var binding = await _db.WorkspaceBindings.FirstOrDefaultAsync(x => x.Id == id, ct)
+        var binding = await GetAuthorizedWorkspaceBindingAsync(id, ct)
             ?? throw new InvalidOperationException($"Workspace binding {id} not found.");
         if (input.SyncMode != null)
         {
@@ -200,12 +225,13 @@ public sealed class BindingService : IBindingService
         var workspace = await _db.Workspaces.FirstAsync(x => x.Id == binding.LocalWorkspaceId, ct);
         ApplyCompatibilityFlags(workspace, binding.SyncMode, account, binding.CloudWorkspaceId);
         await _db.SaveChangesAsync(ct);
+        _logger.LogInformation("Workspace binding {BindingId} revoked.", binding.Id);
         return Map(binding);
     }
 
     public async Task UnbindWorkspaceAsync(Guid id, CancellationToken ct = default)
     {
-        var binding = await _db.WorkspaceBindings.FirstOrDefaultAsync(x => x.Id == id, ct)
+        var binding = await GetAuthorizedWorkspaceBindingAsync(id, ct)
             ?? throw new InvalidOperationException($"Workspace binding {id} not found.");
         binding.BindingStatus = "revoked";
         binding.SyncMode = SyncModes.None;
@@ -222,8 +248,11 @@ public sealed class BindingService : IBindingService
         Guid cloudAccountBindingId,
         CancellationToken ct = default)
     {
+        var identity = await _identityService.EnsureIdentityAsync(ct);
         var keyRef = await _db.CloudAccountBindings
-            .Where(x => x.Id == cloudAccountBindingId && x.BindingStatus == "active")
+            .Where(x => x.Id == cloudAccountBindingId &&
+                        x.LocalProfileId == identity.LocalProfileId &&
+                        x.BindingStatus == "active")
             .Select(x => x.TokenKeyRef)
             .FirstOrDefaultAsync(ct);
         return keyRef == null ? null : await _credentialStore.GetAsync(keyRef, ct);
@@ -231,16 +260,29 @@ public sealed class BindingService : IBindingService
 
     public async Task<string?> GetAccessTokenAsync(
         Guid cloudAccountBindingId,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        await GetAccessTokenInternalAsync(cloudAccountBindingId, false, ct);
+
+    public async Task<string?> RefreshAccessTokenAsync(
+        Guid cloudAccountBindingId,
+        CancellationToken ct = default) =>
+        await GetAccessTokenInternalAsync(cloudAccountBindingId, true, ct);
+
+    private async Task<string?> GetAccessTokenInternalAsync(
+        Guid cloudAccountBindingId,
+        bool forceRefresh,
+        CancellationToken ct)
     {
         var refreshLock = RefreshLocks.GetOrAdd(
             cloudAccountBindingId, _ => new SemaphoreSlim(1, 1));
         await refreshLock.WaitAsync(ct);
         try
         {
+            var identity = await _identityService.EnsureIdentityAsync(ct);
             var binding = await _db.CloudAccountBindings
                 .FirstOrDefaultAsync(x =>
                     x.Id == cloudAccountBindingId &&
+                    x.LocalProfileId == identity.LocalProfileId &&
                     x.BindingStatus == "active", ct);
             if (binding == null) return null;
 
@@ -252,7 +294,7 @@ public sealed class BindingService : IBindingService
                 // Backward compatibility for access tokens stored before metadata support.
                 return stored;
             }
-            if (credential.ExpiresAt > DateTime.UtcNow.AddMinutes(1))
+            if (!forceRefresh && credential.ExpiresAt > DateTime.UtcNow.AddMinutes(1))
             {
                 return credential.AccessToken;
             }
@@ -260,6 +302,12 @@ public sealed class BindingService : IBindingService
             var refreshToken = await _credentialStore.GetAsync(binding.TokenKeyRef, ct);
             if (string.IsNullOrWhiteSpace(refreshToken))
             {
+                binding.BindingStatus = "reauth_required";
+                binding.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+                _logger.LogWarning(
+                    "Cloud account binding {BindingId} requires reauthentication: refresh token missing.",
+                    binding.Id);
                 throw new InvalidOperationException("云端账号刷新令牌不存在，请重新登录。");
             }
 
@@ -275,6 +323,18 @@ public sealed class BindingService : IBindingService
                 ct);
             if (!response.IsSuccessStatusCode)
             {
+                if (response.StatusCode is System.Net.HttpStatusCode.BadRequest or
+                    System.Net.HttpStatusCode.Unauthorized or
+                    System.Net.HttpStatusCode.Forbidden)
+                {
+                    binding.BindingStatus = "reauth_required";
+                    binding.UpdatedAt = DateTime.UtcNow;
+                    await _db.SaveChangesAsync(ct);
+                    _logger.LogWarning(
+                        "Cloud account binding {BindingId} requires reauthentication after token refresh HTTP {StatusCode}.",
+                        binding.Id,
+                        (int)response.StatusCode);
+                }
                 throw new InvalidOperationException(
                     $"云端账号令牌刷新失败（HTTP {(int)response.StatusCode}），请重新登录。");
             }
@@ -379,9 +439,12 @@ public sealed class BindingService : IBindingService
     private static string NormalizeApiBaseUrl(string value)
     {
         if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            (uri.Scheme != Uri.UriSchemeHttps &&
+             !(uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback)))
         {
-            throw new ArgumentException("Cloud API base URL must be an absolute HTTP(S) URL.");
+            throw new ArgumentException(
+                "Cloud API base URL must use HTTPS (except for loopback development addresses).");
         }
         return uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
     }
@@ -397,6 +460,31 @@ public sealed class BindingService : IBindingService
         {
             throw new ArgumentException($"Unsupported conflict policy: {value}");
         }
+    }
+
+    private async Task<Guid?> GetAuthorizedWorkspaceIdAsync(
+        Guid workspaceId,
+        CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (!userId.HasValue) return null;
+        return await _db.Workspaces
+            .Where(x => x.Id == workspaceId && x.UserId == userId.Value)
+            .Select(x => (Guid?)x.Id)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private async Task<WorkspaceBinding?> GetAuthorizedWorkspaceBindingAsync(
+        Guid bindingId,
+        CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (!userId.HasValue) return null;
+        var ownedWorkspaceIds = _db.Workspaces
+            .Where(x => x.UserId == userId.Value)
+            .Select(x => x.Id);
+        return await _db.WorkspaceBindings.FirstOrDefaultAsync(
+            x => x.Id == bindingId && ownedWorkspaceIds.Contains(x.LocalWorkspaceId), ct);
     }
 
     private static CloudAccountBindingDto Map(CloudAccountBinding x) => new()

@@ -30,6 +30,7 @@ public static class DependencyInjection
         services.Configure<MinioSettings>(configuration.GetSection("Minio"));
         services.Configure<LlmSettings>(configuration.GetSection("Llm"));
         services.Configure<EmbeddingSettings>(configuration.GetSection("Embedding"));
+        services.Configure<EntityResolutionSettings>(configuration.GetSection("EntityResolution"));
         services.Configure<LocalFileStorageSettings>(configuration.GetSection("LocalFileStorage"));
 
         // DbContext
@@ -115,6 +116,19 @@ public static class DependencyInjection
         services.AddScoped<IContentCleaner, ContentCleaner>();
         services.AddScoped<IMarkdownNormalizer, MarkdownNormalizer>();
         services.AddScoped<IAISummaryService, AISummaryService>();
+        services.AddSingleton<IEntityTypeRegistry, EntityTypeRegistry>();
+        services.AddSingleton<IEntityNameNormalizer, EntityNameNormalizer>();
+        services.AddScoped<IEntityVectorSimilarityService, EntityVectorSimilarityService>();
+        services.AddScoped<IEntityCandidateResolver, EntityCandidateResolver>();
+        services.AddScoped<IEntityDisambiguationService, EntityDisambiguationService>();
+        services.AddScoped<IEntityResolutionOrchestrator, EntityResolutionOrchestrator>();
+        services.AddScoped<IEntityGovernanceService, EntityGovernanceService>();
+        services.AddScoped<IEntityRedirectResolver, EntityRedirectResolver>();
+        services.AddScoped<IEntityMergeService, EntityMergeService>();
+        services.AddScoped<IEntityIndexSyncService, EntityIndexSyncService>();
+        services.AddScoped<IEntityOutboxProcessor, EntityOutboxProcessor>();
+        services.AddScoped<IKnowledgeGraphService, EntityKnowledgeGraphService>();
+        services.AddScoped<IEntityQueryExpansionService, EntityQueryExpansionService>();
         services.AddSingleton<ILanguageDetectionService, LanguageDetectionService>();
         services.AddSingleton<IContentClassificationService, ContentClassificationService>();
         services.AddSingleton<IChineseNormalizationService, ChineseNormalizationService>();
@@ -133,6 +147,8 @@ public static class DependencyInjection
         services.AddHostedService<MediaProcessingWorker>();
         services.AddHostedService<PushNotificationWorker>();
         services.AddHostedService<MultilingualBatchWorker>();
+        services.AddHostedService<EntityGovernanceWorker>();
+        services.AddHostedService<EntityOutboxWorker>();
 
         // ===== Phase 3 Services =====
 

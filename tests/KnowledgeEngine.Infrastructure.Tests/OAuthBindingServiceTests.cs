@@ -76,5 +76,8 @@ public class OAuthBindingServiceTests
         public Task<string?> GetAccessTokenAsync(
             Guid cloudAccountBindingId,
             CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<string?> RefreshAccessTokenAsync(
+            Guid cloudAccountBindingId,
+            CancellationToken ct = default) => throw new NotSupportedException();
     }
 }

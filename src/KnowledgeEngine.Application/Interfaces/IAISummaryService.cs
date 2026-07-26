@@ -45,14 +45,35 @@ public class TagResult
 public class EntityResult
 {
     public string? Name { get; set; }
+    public string? Mention { get; set; }
+    public string? CanonicalNameSuggestion { get; set; }
     public string? EntityType { get; set; }
     public string? Description { get; set; }
+    public string? Evidence { get; set; }
+    public int? StartOffset { get; set; }
+    public int? EndOffset { get; set; }
     public decimal? Confidence { get; set; }
     public decimal? Importance { get; set; }
     public int MentionCount { get; set; } = 1;
     public List<string>? Aliases { get; set; }
+    public List<EntityAliasResult>? AliasDetails { get; set; }
+    public List<EntityExternalIdResult>? ExternalIds { get; set; }
     public List<string>? Examples { get; set; }
     public string? Role { get; set; }
     public string? Sentiment { get; set; }
     public string? FirstMention { get; set; }
+}
+
+public class EntityAliasResult
+{
+    public string? Value { get; set; }
+    public string? Language { get; set; }
+    public string? AliasType { get; set; }
+}
+
+public class EntityExternalIdResult
+{
+    public string? IdType { get; set; }
+    public string? IdValue { get; set; }
+    public string? Source { get; set; }
 }

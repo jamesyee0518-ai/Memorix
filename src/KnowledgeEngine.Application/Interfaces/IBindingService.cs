@@ -22,4 +22,5 @@ public interface IBindingService
     Task UnbindWorkspaceAsync(Guid id, CancellationToken ct = default);
     Task<string?> GetRefreshTokenAsync(Guid cloudAccountBindingId, CancellationToken ct = default);
     Task<string?> GetAccessTokenAsync(Guid cloudAccountBindingId, CancellationToken ct = default);
+    Task<string?> RefreshAccessTokenAsync(Guid cloudAccountBindingId, CancellationToken ct = default);
 }

@@ -1,3 +1,4 @@
+using KnowledgeEngine.Api.Services;
 using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -11,10 +12,14 @@ namespace KnowledgeEngine.Api.Controllers;
 public class BindingsController : BaseController
 {
     private readonly IBindingService _bindingService;
+    private readonly CloudWorkspaceDiscoveryService _cloudWorkspaceDiscovery;
 
-    public BindingsController(IBindingService bindingService)
+    public BindingsController(
+        IBindingService bindingService,
+        CloudWorkspaceDiscoveryService cloudWorkspaceDiscovery)
     {
         _bindingService = bindingService;
+        _cloudWorkspaceDiscovery = cloudWorkspaceDiscovery;
     }
 
     [HttpGet("cloud-accounts")]
@@ -37,6 +42,11 @@ public class BindingsController : BaseController
         await _bindingService.UnbindCloudAccountAsync(id, ct);
         return NoContent();
     }
+
+    [HttpGet("cloud-accounts/{id:guid}/workspaces")]
+    public async Task<IActionResult> ListCloudWorkspaces(Guid id, CancellationToken ct) =>
+        Ok(ApiResponse<CloudWorkspaceDiscoveryDto>.Ok(
+            await _cloudWorkspaceDiscovery.DiscoverAsync(id, ct), GetTraceId()));
 
     [HttpGet("workspaces")]
     public async Task<IActionResult> ListWorkspaceBindings(

@@ -12,6 +12,23 @@ public class CloudAccountBindingDto
     public DateTime? LastAuthenticatedAt { get; set; }
 }
 
+public class CloudWorkspaceDiscoveryDto
+{
+    public List<CloudWorkspaceSummaryDto> Workspaces { get; set; } = [];
+    public string? CloudApiVersion { get; set; }
+    public bool Compatible { get; set; }
+    public string? CompatibilityMessage { get; set; }
+    public List<string> Capabilities { get; set; } = [];
+}
+
+public class CloudWorkspaceSummaryDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Mode { get; set; } = string.Empty;
+    public string? Role { get; set; }
+}
+
 public class CreateCloudAccountBindingDto
 {
     public string CloudUserId { get; set; } = string.Empty;

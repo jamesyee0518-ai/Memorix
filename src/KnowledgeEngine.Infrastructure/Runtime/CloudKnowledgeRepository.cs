@@ -727,6 +727,7 @@ public class CloudKnowledgeRepository : ICloudKnowledgeRepository
         {
             Id = Guid.NewGuid(),
             UserId = Guid.TryParse(input.WorkspaceId, out var uid) ? uid : Guid.Empty,
+            WorkspaceId = Guid.TryParse(input.WorkspaceId, out var workspaceId) ? workspaceId : null,
             TopicId = Guid.TryParse(input.TopicId, out var tid) ? tid : null,
             SourceId = Guid.TryParse(input.SourceId, out var sid) ? sid : Guid.Empty,
             Title = input.Title,

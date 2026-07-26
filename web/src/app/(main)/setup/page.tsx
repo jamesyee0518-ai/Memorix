@@ -19,7 +19,13 @@ import {
   Radar,
   Sparkles,
 } from "lucide-react";
-import { ApiRequestError, runtimeApi, topicApi, workspaceApi } from "@/lib/api";
+import {
+  ApiRequestError,
+  desktopRuntimeApi,
+  runtimeApi,
+  topicApi,
+  workspaceApi,
+} from "@/lib/api";
 import type { WorkspaceMode, WorkspaceModeOption } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,8 +104,8 @@ export default function SetupPage() {
   useEffect(() => {
     const fetchModes = async () => {
       try {
-        const data = await workspaceApi.getModes();
-        setModes(data);
+        const data = await desktopRuntimeApi.getCapabilities();
+        setModes(data.modes);
       } catch (err) {
         const message =
           err instanceof ApiRequestError ? err.message : "加载模式列表失败";
@@ -133,7 +139,11 @@ export default function SetupPage() {
                   ? "云端模式"
                   : "混合模式",
             description: modeDescriptions[m],
-            available: true,
+            available: m === "local",
+            status: m === "local" ? "ready" : "coming_soon",
+            badge: m === "local" ? "可用" : "即将支持",
+            reason: m === "local" ? undefined : "capabilities_unavailable",
+            requiresAuthentication: m !== "local",
           })),
     [modes]
   );
@@ -301,7 +311,10 @@ export default function SetupPage() {
               <Card
                 key={option.mode}
                 className={cn(
-                  "cursor-pointer transition-all hover:shadow-md",
+                  "transition-all",
+                  option.available
+                    ? "cursor-pointer hover:shadow-md"
+                    : "cursor-not-allowed",
                   selected && "ring-2 ring-primary",
                   !option.available && "opacity-50"
                 )}
@@ -321,10 +334,20 @@ export default function SetupPage() {
                   <div>
                     <h3 className="flex items-center justify-center gap-1.5 font-semibold">
                       {option.label}
-                      {option.mode === "cloud" && (
-                        <Badge className="border-amber-500/30 bg-amber-500/10 text-amber-600">
-                          <Clock className="size-3" />
-                          即将支持
+                      {option.mode !== "local" && option.badge && (
+                        <Badge
+                          className={cn(
+                            option.status === "beta" &&
+                              "border-blue-500/30 bg-blue-500/10 text-blue-600",
+                            option.status === "ready" &&
+                              "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+                            option.status !== "beta" &&
+                              option.status !== "ready" &&
+                              "border-amber-500/30 bg-amber-500/10 text-amber-600"
+                          )}
+                        >
+                          {option.status !== "ready" && <Clock className="size-3" />}
+                          {option.badge}
                         </Badge>
                       )}
                       {selected && <Check className="size-4 text-primary" />}
@@ -335,7 +358,7 @@ export default function SetupPage() {
                   </div>
                   {!option.available && (
                     <span className="text-xs text-muted-foreground">
-                      暂不可用
+                      {option.badge ?? "暂不可用"}
                     </span>
                   )}
                 </CardContent>
@@ -358,13 +381,6 @@ export default function SetupPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {selectedMode === "cloud" && (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-700">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <span>云端模式即将支持，当前版本建议优先使用本地模式。</span>
-              </div>
-            )}
-
             <div className="space-y-2">
               <Label htmlFor="setup-name">
                 工作区名称 <span className="text-destructive">*</span>

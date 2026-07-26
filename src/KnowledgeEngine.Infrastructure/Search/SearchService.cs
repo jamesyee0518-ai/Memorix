@@ -21,6 +21,7 @@ public class SearchService : ISearchService
     private readonly IChineseFullTextIndexService _fullTextIndex;
     private readonly IRetrievalFusionService _fusion;
     private readonly IChineseTokenizer _tokenizer;
+    private readonly IEntityQueryExpansionService _entityQueryExpansion;
     private readonly ILogger<SearchService> _logger;
 
     public SearchService(
@@ -29,6 +30,7 @@ public class SearchService : ISearchService
         IChineseFullTextIndexService fullTextIndex,
         IRetrievalFusionService fusion,
         IChineseTokenizer tokenizer,
+        IEntityQueryExpansionService entityQueryExpansion,
         ILogger<SearchService> logger)
     {
         _db = db;
@@ -36,6 +38,7 @@ public class SearchService : ISearchService
         _fullTextIndex = fullTextIndex;
         _fusion = fusion;
         _tokenizer = tokenizer;
+        _entityQueryExpansion = entityQueryExpansion;
         _logger = logger;
     }
 
@@ -55,6 +58,20 @@ public class SearchService : ISearchService
 
             var searchType = string.IsNullOrEmpty(request.SearchType) ? "hybrid" : request.SearchType.ToLowerInvariant();
             var limit = request.Limit > 0 && request.Limit <= MaxResults ? request.Limit : MaxResults;
+            var entityExpansion = await _entityQueryExpansion.ExpandAsync(
+                userId, request.Query, request.Filters?.EntityIds, ct);
+            if (entityExpansion.EntityIds.Count > 0)
+            {
+                request.Filters ??= new SearchFilters();
+                request.Filters.EntityIds = entityExpansion.EntityIds.ToList();
+                request.ExpandedEntityTerms = entityExpansion.CanonicalTerms
+                    .Concat(entityExpansion.VerifiedAliases)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(x => x.Trim().ToLowerInvariant())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(30)
+                    .ToList();
+            }
 
             List<SearchResultItem> items;
 
@@ -89,7 +106,12 @@ public class SearchService : ISearchService
                     LatencyMs = sw.ElapsedMilliseconds,
                     KeywordMatchCount = searchType == "keyword" || searchType == "hybrid" ? items.Count : 0,
                     VectorMatchCount = searchType == "vector" || searchType == "hybrid" ? items.Count : 0,
-                    FusionMode = searchType == "hybrid" ? request.FusionMode : null
+                    FusionMode = searchType == "hybrid" ? request.FusionMode : null,
+                    RecognizedEntityIds = entityExpansion.EntityIds,
+                    EntityQueryTerms = entityExpansion.CanonicalTerms
+                        .Concat(entityExpansion.VerifiedAliases)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList()
                 }
             };
 
@@ -143,7 +165,11 @@ public class SearchService : ISearchService
         CancellationToken ct)
     {
         var query = NormalizeKeywordQuery(request.Query);
-        var terms = BuildKeywordTerms(query);
+        var terms = BuildKeywordTerms(query)
+            .Concat(request.ExpandedEntityTerms ?? [])
+            .Where(x => x.Length >= 2)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var filters = request.Filters;
 
         // Pre-compute tag/entity filter doc id sets once (async) to apply to both queries

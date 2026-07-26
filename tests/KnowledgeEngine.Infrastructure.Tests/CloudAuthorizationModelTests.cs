@@ -9,6 +9,7 @@ using KnowledgeEngine.Infrastructure.Runtime;
 using KnowledgeEngine.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -24,6 +25,36 @@ public sealed class CloudAuthorizationModelTests
     {
         AssertPolicy<BetaUserController>(AuthorizationPolicies.PlatformOperator);
         AssertPolicy<PushNotificationsController>(AuthorizationPolicies.PlatformOperator);
+    }
+
+    [Fact]
+    public void RuntimeController_SplitsWorkspaceAndPlatformHealthPermissions()
+    {
+        var workspaceMethod = typeof(RuntimeController).GetMethod(nameof(RuntimeController.CheckWorkspaceHealth));
+        Assert.NotNull(workspaceMethod);
+        var workspaceAuthorize = workspaceMethod!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), true)
+            .Cast<AuthorizeAttribute>()
+            .Single();
+        Assert.Null(workspaceAuthorize.Policy);
+        Assert.Contains(
+            workspaceMethod.GetCustomAttributes(typeof(HttpGetAttribute), true).Cast<HttpGetAttribute>(),
+            attribute => attribute.Template == "workspace-health");
+
+        var platformMethod = typeof(RuntimeController).GetMethod(nameof(RuntimeController.CheckPlatformHealth));
+        Assert.NotNull(platformMethod);
+        var platformAuthorize = platformMethod!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), true)
+            .Cast<AuthorizeAttribute>()
+            .Single();
+        Assert.Equal(AuthorizationPolicies.PlatformAdmin, platformAuthorize.Policy);
+        var platformRoutes = platformMethod
+            .GetCustomAttributes(typeof(HttpGetAttribute), true)
+            .Cast<HttpGetAttribute>()
+            .Select(attribute => attribute.Template)
+            .ToList();
+        Assert.Contains("platform-health", platformRoutes);
+        Assert.Contains("health", platformRoutes);
     }
 
     [Fact]

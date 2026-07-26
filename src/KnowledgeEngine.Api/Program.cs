@@ -11,6 +11,7 @@ using KnowledgeEngine.Infrastructure.Mcp;
 using KnowledgeEngine.Infrastructure.Reports;
 using KnowledgeEngine.Api.Middlewares;
 using KnowledgeEngine.Api.Security;
+using KnowledgeEngine.Api.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -47,6 +48,9 @@ var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<st
 // Add services
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddSingleton<DesktopCapabilityService>();
+builder.Services.AddScoped<CloudWorkspaceDiscoveryService>();
+builder.Services.AddSingleton<DesktopRuntimeCoordinator>();
 
 // Controllers
 builder.Services.AddControllers().AddJsonOptions(options =>
@@ -144,6 +148,7 @@ using (var scope = app.Services.CreateScope())
     {
         db.Database.EnsureCreated();
         db.EnsureMultilingualSetupAsync().GetAwaiter().GetResult();
+        db.EnsureEntityResolutionSetupAsync().GetAwaiter().GetResult();
         db.EnsureIdentityAndBindingSetupAsync().GetAwaiter().GetResult();
         scope.ServiceProvider.GetRequiredService<IChineseFullTextIndexService>()
             .EnsureCreatedAsync().GetAwaiter().GetResult();
@@ -270,6 +275,7 @@ app.UseCors();
 // Authentication & Authorization
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<CloudApiProxyMiddleware>();
 
 // Agent API Key authentication middleware (after JWT auth, handles /api/agent/ paths)
 app.UseMiddleware<AgentAuthMiddleware>();

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using KnowledgeEngine.Application.Settings;
+using KnowledgeEngine.Api.Services;
 
 namespace KnowledgeEngine.Api.Controllers;
 
@@ -29,6 +30,8 @@ public class WorkspacesController : BaseController
     private readonly ILanguageDetectionService _languageDetection;
     private readonly IContentClassificationService _contentClassification;
     private readonly IChineseNormalizationService _chineseNormalization;
+    private readonly DesktopCapabilityService _desktopCapabilities;
+    private readonly DesktopRuntimeCoordinator _runtimeCoordinator;
 
     public WorkspacesController(
         IWorkspaceService workspaceService,
@@ -40,7 +43,9 @@ public class WorkspacesController : BaseController
         IConfiguration configuration,
         ILanguageDetectionService languageDetection,
         IContentClassificationService contentClassification,
-        IChineseNormalizationService chineseNormalization)
+        IChineseNormalizationService chineseNormalization,
+        DesktopCapabilityService desktopCapabilities,
+        DesktopRuntimeCoordinator runtimeCoordinator)
     {
         _workspaceService = workspaceService;
         _configService = configService;
@@ -52,6 +57,8 @@ public class WorkspacesController : BaseController
         _languageDetection = languageDetection;
         _contentClassification = contentClassification;
         _chineseNormalization = chineseNormalization;
+        _desktopCapabilities = desktopCapabilities;
+        _runtimeCoordinator = runtimeCoordinator;
     }
 
     [HttpGet("actions/index-state")]
@@ -217,6 +224,9 @@ public class WorkspacesController : BaseController
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateWorkspaceDto input, CancellationToken ct)
     {
+        var unavailableResult = ValidateMode(input.Mode);
+        if (unavailableResult != null) return unavailableResult;
+
         var workspace = await _workspaceService.CreateWorkspaceAsync(input, ct);
         return CreatedAtAction(nameof(Get), new { id = workspace.Id }, ApiResponse<WorkspaceDto>.Ok(workspace, GetTraceId()));
     }
@@ -274,7 +284,11 @@ public class WorkspacesController : BaseController
                 "Workspace not found",
                 GetTraceId()));
         }
+        var unavailableResult = ValidateMode(workspace.Mode);
+        if (unavailableResult != null) return unavailableResult;
+
         await _workspaceService.SetCurrentWorkspaceAsync(userId, id, ct);
+        _runtimeCoordinator.Advance();
         return Ok(ApiResponse<object>.Ok(new { workspaceId = id }, GetTraceId()));
     }
 
@@ -295,13 +309,31 @@ public class WorkspacesController : BaseController
     [AllowAnonymous]
     public IActionResult GetModes()
     {
-        var modes = new List<WorkspaceModeOption>
-        {
-            new() { Mode = "local", Label = "本地模式", Description = "数据保存在本机，适合隐私资料和本地模型用户", Available = true },
-            new() { Mode = "cloud", Label = "云端模式", Description = "数据保存在云端，适合多设备访问和手机端采集", Available = true },
-            new() { Mode = "hybrid", Label = "混合模式", Description = "本地保存主库，云端用于手机采集和同步", Available = false }
-        };
+        var modes = _desktopCapabilities.GetCapabilities().Modes;
         return Ok(ApiResponse<List<WorkspaceModeOption>>.Ok(modes, GetTraceId()));
+    }
+
+    private IActionResult? ValidateMode(string? mode)
+    {
+        WorkspaceModeOption option;
+        try
+        {
+            option = _desktopCapabilities.GetMode(mode);
+        }
+        catch (ArgumentException)
+        {
+            return BadRequest(ApiResponse<object>.FailObject(
+                "INVALID_WORKSPACE_MODE",
+                "不支持的工作区模式",
+                GetTraceId()));
+        }
+
+        if (option.Available) return null;
+
+        return Conflict(ApiResponse<object>.FailObject(
+            "MODE_NOT_AVAILABLE",
+            $"{option.Label}当前{option.Badge ?? "不可用"}",
+            GetTraceId()));
     }
 
     /// <summary>

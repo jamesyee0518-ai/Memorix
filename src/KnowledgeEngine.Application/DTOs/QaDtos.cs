@@ -77,6 +77,14 @@ public class Citation
     public Guid? LocalizationId { get; set; }
     public string? TranslationType { get; set; }
     public string? ReviewStatus { get; set; }
+    public IReadOnlyList<CitationEntityReference> Entities { get; set; } = [];
+}
+
+public sealed class CitationEntityReference
+{
+    public Guid EntityId { get; set; }
+    public string PreferredName { get; set; } = string.Empty;
+    public string OriginalMention { get; set; } = string.Empty;
 }
 
 public class RetrievalInfo

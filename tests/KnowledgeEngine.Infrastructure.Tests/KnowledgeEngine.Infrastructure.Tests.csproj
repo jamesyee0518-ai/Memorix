@@ -17,4 +17,10 @@
     <ProjectReference Include="../../src/KnowledgeEngine.Api/KnowledgeEngine.Api.csproj" />
     <ProjectReference Include="../../src/KnowledgeEngine.Infrastructure/KnowledgeEngine.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../fixtures/entity-resolution-golden-v1.jsonl">
+      <Link>fixtures/entity-resolution-golden-v1.jsonl</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

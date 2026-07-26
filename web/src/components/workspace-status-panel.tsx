@@ -14,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { ApiRequestError, runtimeApi, workspaceApi } from "@/lib/api";
-import type { RuntimeHealth, Workspace } from "@/lib/types";
+import type { WorkspaceRuntimeHealth, Workspace } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,7 +72,7 @@ export function WorkspaceStatusPanel({
   compact?: boolean;
 }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [health, setHealth] = useState<RuntimeHealth | null>(null);
+  const [health, setHealth] = useState<WorkspaceRuntimeHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,7 +85,7 @@ export function WorkspaceStatusPanel({
       try {
         const [currentWorkspace, runtimeHealth] = await Promise.all([
           workspaceApi.getCurrent().catch(() => null),
-          runtimeApi.health().catch(() => null),
+          runtimeApi.workspaceHealth().catch(() => null),
         ]);
         if (!mounted) return;
         setWorkspace(currentWorkspace);
@@ -227,13 +227,13 @@ export function WorkspaceStatusPanel({
                 <Badge className={statusClass(health?.overall)}>
                   {health?.overall ?? "未知"}
                 </Badge>
-                <span className="text-muted-foreground">数据库</span>
-                <Badge className={statusClass(health?.database)}>
-                  {health?.database ?? "未知"}
+                <span className="text-muted-foreground">知识存储</span>
+                <Badge className={statusClass(health?.knowledgeStorage)}>
+                  {health?.knowledgeStorage ?? "未知"}
                 </Badge>
                 <span className="text-muted-foreground">模型</span>
-                <Badge className={statusClass(health?.llmService)}>
-                  {health?.llmService ?? "未知"}
+                <Badge className={statusClass(health?.aiService)}>
+                  {health?.aiService ?? "未知"}
                 </Badge>
               </div>
               <div className="flex flex-wrap gap-2">

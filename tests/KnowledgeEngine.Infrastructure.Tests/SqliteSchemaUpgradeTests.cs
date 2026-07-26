@@ -131,6 +131,62 @@ public class SqliteSchemaUpgradeTests
             connection, "SELECT user_id FROM workspaces WHERE Id = 'ws-legacy'"));
     }
 
+    [Fact]
+    public async Task EnsureEntityResolutionSetupAsync_UpgradesLegacyEntitySchema()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await ExecuteAsync(connection, """
+            CREATE TABLE workspaces (
+                Id TEXT PRIMARY KEY, UserId TEXT, CreatedAt TEXT NOT NULL
+            );
+            CREATE TABLE entities (
+                Id TEXT PRIMARY KEY, UserId TEXT NOT NULL, WorkspaceId TEXT,
+                Name TEXT NOT NULL, NormalizedName TEXT, EntityType TEXT NOT NULL
+            );
+            INSERT INTO workspaces (Id, UserId, CreatedAt)
+            VALUES ('22222222-2222-2222-2222-222222222222',
+                    '11111111-1111-1111-1111-111111111111',
+                    '2026-01-01T00:00:00Z');
+            INSERT INTO entities (Id, UserId, WorkspaceId, Name, NormalizedName, EntityType)
+            VALUES ('33333333-3333-3333-3333-333333333333',
+                    '11111111-1111-1111-1111-111111111111',
+                    'default', 'OpenAI', 'openai', 'company');
+            """);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using var db = new AppDbContext(options);
+
+        await db.EnsureEntityResolutionSetupAsync();
+        await db.EnsureEntityResolutionSetupAsync();
+
+        Assert.True(await HasColumnAsync(connection, "entities", "canonical_name"));
+        Assert.True(await HasColumnAsync(connection, "entities", "normalized_key"));
+        Assert.True(await HasColumnAsync(connection, "entities", "entity_status"));
+        Assert.True(await HasTableAsync(connection, "entity_aliases"));
+        Assert.True(await HasTableAsync(connection, "entity_mentions"));
+        Assert.True(await HasTableAsync(connection, "entity_external_ids"));
+        Assert.True(await HasTableAsync(connection, "entity_resolution_candidates"));
+        Assert.True(await HasColumnAsync(
+            connection, "entity_resolution_candidates", "llm_decision"));
+        Assert.True(await HasColumnAsync(
+            connection, "entity_resolution_candidates", "llm_prompt_version"));
+        Assert.True(await HasTableAsync(connection, "entity_embeddings"));
+        Assert.True(await HasTableAsync(connection, "entity_governance_tasks"));
+        Assert.True(await HasTableAsync(connection, "entity_merge_logs"));
+        Assert.True(await HasTableAsync(connection, "entity_merge_blocklist"));
+        Assert.True(await HasTableAsync(connection, "entity_outbox_events"));
+        Assert.Equal("OpenAI", await ScalarAsync(
+            connection, "SELECT canonical_name FROM entities LIMIT 1"));
+        Assert.Equal("openai", await ScalarAsync(
+            connection, "SELECT normalized_key FROM entities LIMIT 1"));
+        Assert.Equal("22222222-2222-2222-2222-222222222222", await ScalarAsync(
+            connection, "SELECT WorkspaceId FROM entities LIMIT 1"));
+    }
+
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();

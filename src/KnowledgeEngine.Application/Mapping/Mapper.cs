@@ -359,26 +359,53 @@ public static class Mapper
         return new EntityListItem
         {
             Id = entity.Id,
+            WorkspaceId = entity.WorkspaceId,
             Name = entity.Name,
+            CanonicalName = entity.CanonicalName,
+            PreferredNameZh = entity.PreferredNameZh,
+            PreferredNameEn = entity.PreferredNameEn,
+            Abbreviation = entity.Abbreviation,
             EntityType = entity.EntityType,
+            Status = entity.Status,
+            IsVerified = entity.IsVerified,
+            Confidence = entity.Confidence,
             Description = entity.Description,
             DocumentCount = documentCount,
+            MentionCount = entity.MentionCount,
             CreatedAt = entity.CreatedAt,
             UpdatedAt = entity.UpdatedAt
         };
     }
 
-    public static EntityDetail ToEntityDetail(Entity entity, List<RelatedDocument>? relatedDocuments = null)
+    public static EntityDetail ToEntityDetail(
+        Entity entity,
+        List<RelatedDocument>? relatedDocuments = null,
+        List<EntityAliasItem>? aliases = null)
     {
         return new EntityDetail
         {
             Id = entity.Id,
             UserId = entity.UserId,
+            WorkspaceId = entity.WorkspaceId,
             Name = entity.Name,
+            CanonicalName = entity.CanonicalName,
+            PreferredNameZh = entity.PreferredNameZh,
+            PreferredNameEn = entity.PreferredNameEn,
+            Abbreviation = entity.Abbreviation,
             NormalizedName = entity.NormalizedName,
+            NormalizedKey = entity.NormalizedKey,
+            NormalizationVersion = entity.NormalizationVersion,
+            RowVersion = entity.RowVersion,
             EntityType = entity.EntityType,
+            Status = entity.Status,
+            MergedIntoId = entity.MergedIntoId,
+            IsVerified = entity.IsVerified,
+            Confidence = entity.Confidence,
+            SourceCount = entity.SourceCount,
+            MentionCount = entity.MentionCount,
             Description = entity.Description,
             Metadata = entity.Metadata,
+            Aliases = aliases ?? new List<EntityAliasItem>(),
             RelatedDocuments = relatedDocuments ?? new List<RelatedDocument>(),
             CreatedAt = entity.CreatedAt,
             UpdatedAt = entity.UpdatedAt

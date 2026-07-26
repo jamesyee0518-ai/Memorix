@@ -9,7 +9,7 @@ namespace KnowledgeEngine.Infrastructure.Processing;
 /// </summary>
 public class SummaryPromptManager : ISummaryPromptManager
 {
-    private const string PromptVersion = "summary_v2";
+    private const string PromptVersion = "summary_v3_entity_mentions";
 
     private static readonly string SystemPrompt =
         "你是一个知识资产整理助手。请基于用户提供的文档内容，生成结构化中文摘要。\n\n" +
@@ -27,7 +27,11 @@ public class SummaryPromptManager : ISummaryPromptManager
         "11. opportunities 提取可行动的产品、市场、研究或技术机会。\n" +
         "12. reusable_materials 提取可直接复用的观点、方法、框架、数据、案例或文案。\n" +
         "13. 上述五个数组必须始终返回；每项用一条完整、具体的中文短句。确实没有时才返回空数组，不得因资料类型而省略字段。\n" +
-        "14. should_deep_process 表示是否值得进入后续分块、向量化和深度分析。\n\n" +
+        "14. should_deep_process 表示是否值得进入后续分块、向量化和深度分析。\n" +
+        "15. entities 只抽取原文中有明确证据的实体提及；entity_type 必须从 PERSON、ORGANIZATION、COMPANY、INSTITUTION、PRODUCT、MODEL_FAMILY、MODEL、TECHNOLOGY、FRAMEWORK、LIBRARY、DATASET、STANDARD、LOCATION、EVENT、INDUSTRY、CONCEPT、DOCUMENT 中选择。\n" +
+        "16. 模型系列和具体版本必须分别抽取；公司、品牌和产品不得视为同一实体。\n" +
+        "17. mention 必须保留原文写法；canonical_name_suggestion 只是标准名建议，不代表已链接到现有实体。\n" +
+        "18. alias_details 中每个别名必须标记 language 和 alias_type；不确定的别名不要输出。\n\n" +
         "评分参考：\n" +
         "- 90-100：高价值资料，适合长期保存和深度研究。\n" +
         "- 70-89：有明显价值，适合进入知识库。\n" +
@@ -72,6 +76,34 @@ public class SummaryPromptManager : ISummaryPromptManager
   ""value_score"": 0,
   ""value_score_reason"": """",
   ""recommended_tags"": [],
+  ""tags"": [
+    {{""name"": """", ""type"": ""topic|technology|industry|organization|person|product"", ""description"": """", ""confidence"": 0.0, ""reason"": """"}}
+  ],
+  ""entities"": [
+    {{
+      ""mention"": """",
+      ""name"": """",
+      ""canonical_name_suggestion"": """",
+      ""entity_type"": ""PERSON|ORGANIZATION|COMPANY|INSTITUTION|PRODUCT|MODEL_FAMILY|MODEL|TECHNOLOGY|FRAMEWORK|LIBRARY|DATASET|STANDARD|LOCATION|EVENT|INDUSTRY|CONCEPT|DOCUMENT"",
+      ""description"": """",
+      ""evidence"": """",
+      ""start_offset"": null,
+      ""end_offset"": null,
+      ""confidence"": 0.0,
+      ""importance"": 0.0,
+      ""mention_count"": 1,
+      ""aliases"": [],
+      ""alias_details"": [
+        {{""value"": """", ""language"": ""zh-CN|en|und"", ""alias_type"": ""ABBREVIATION|TRANSLATION|FULL_NAME|SHORT_NAME|FORMER_NAME|SPELLING_VARIANT|TRANSLITERATION""}}
+      ],
+      ""external_ids"": [
+        {{""id_type"": ""WIKIDATA|ORCID|DOI|ROR|GITHUB|DOMAIN|OTHER"", ""id_value"": """", ""source"": ""正文或资料元数据中的证据""}}
+      ],
+      ""examples"": [],
+      ""role"": """",
+      ""sentiment"": """"
+    }}
+  ],
   ""should_deep_process"": true
 }}
 

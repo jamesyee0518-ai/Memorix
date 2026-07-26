@@ -28,8 +28,20 @@ import type {
   DocumentEntityItem,
   EntityListItem,
   EntityDetail,
+  EntityAlias,
+  EntityGraph,
+  EntityGraphDocument,
+  EntityGovernanceTask,
+  EntityMergePreview,
+  EntityMergeHistoryItem,
+  EntityQualityMetrics,
   Tag,
   Terminology,
+  TerminologyStats,
+  TerminologyCandidate,
+  TerminologyBulkResult,
+  TerminologyConflict,
+  TerminologyUsage,
   DocumentChunkItem,
   ChunkLocalization,
   ChunkEnrichment,
@@ -69,6 +81,7 @@ import type {
   InitLocalWorkspaceInput,
   UpdateWorkspaceInput,
   WorkspaceModeOption,
+  DesktopCapabilities,
   ModelProviderOption,
   CloudInboxSettings,
   UpdateCloudInboxSettingsInput,
@@ -77,6 +90,9 @@ import type {
   CloudInboxPullResult,
   CloudInboxSyncLog,
   CloudAccountBinding,
+  CloudWorkspaceDiscovery,
+  DesktopCloudConnectionStatus,
+  DesktopRuntimeState,
   WorkspaceBinding,
   OAuthStartInput,
   OAuthStartResult,
@@ -86,6 +102,7 @@ import type {
   PushNotification,
   LocalConfig,
   RuntimeHealth,
+  WorkspaceRuntimeHealth,
   LocalModelDetection,
   UpdateModelSettingsInput,
   ModelTestResult,
@@ -480,6 +497,7 @@ export const entityApi = {
   list(params?: {
     entityType?: string;
     search?: string;
+    status?: string;
   }): Promise<PagedResult<EntityListItem>> {
     return request<PagedResult<EntityListItem>>({
       method: "GET",
@@ -492,6 +510,27 @@ export const entityApi = {
     return request<EntityDetail>({
       method: "GET",
       url: `/entities/${id}`,
+    });
+  },
+
+  addAlias(id: string, data: {
+    alias: string;
+    languageCode?: string;
+    aliasType?: string;
+    isVerified?: boolean;
+    confidence?: number;
+  }): Promise<EntityAlias> {
+    return request<EntityAlias>({
+      method: "POST",
+      url: `/entities/${id}/aliases`,
+      data,
+    });
+  },
+
+  deleteAlias(id: string, aliasId: string): Promise<void> {
+    return request<void>({
+      method: "DELETE",
+      url: `/entities/${id}/aliases/${aliasId}`,
     });
   },
 
@@ -511,11 +550,152 @@ export const entityApi = {
   },
 };
 
+export const knowledgeGraphApi = {
+  getEntities(params?: {
+    workspaceId?: string;
+    entityType?: string;
+    language?: string;
+    limit?: number;
+  }): Promise<EntityGraph> {
+    return request<EntityGraph>({
+      method: "GET",
+      url: "/knowledgegraph/entities",
+      params,
+    });
+  },
+
+  getNeighbors(id: string, params?: { language?: string; limit?: number }): Promise<EntityGraph> {
+    return request<EntityGraph>({
+      method: "GET",
+      url: `/knowledgegraph/entities/${id}/neighbors`,
+      params,
+    });
+  },
+
+  getDocuments(id: string, params?: { language?: string; limit?: number }): Promise<EntityGraphDocument[]> {
+    return request<EntityGraphDocument[]>({
+      method: "GET",
+      url: `/knowledgegraph/entities/${id}/documents`,
+      params,
+    });
+  },
+};
+
+export const entityGovernanceApi = {
+  listTasks(params?: {
+    workspaceId?: string;
+    status?: string;
+    taskType?: string;
+    limit?: number;
+  }): Promise<EntityGovernanceTask[]> {
+    return request<EntityGovernanceTask[]>({
+      method: "GET",
+      url: "/entitygovernance/tasks",
+      params,
+    });
+  },
+
+  qualityMetrics(workspaceId?: string): Promise<EntityQualityMetrics> {
+    return request<EntityQualityMetrics>({
+      method: "GET",
+      url: "/entitygovernance/quality-metrics",
+      params: { workspaceId },
+    });
+  },
+
+  startScan(data: {
+    workspaceId: string;
+    entityType?: string;
+    batchSize?: number;
+    idempotencyKey: string;
+  }): Promise<EntityGovernanceTask> {
+    return request<EntityGovernanceTask>({
+      method: "POST",
+      url: "/entityresolution/scan",
+      data,
+      headers: { "Idempotency-Key": data.idempotencyKey },
+    });
+  },
+
+  controlTask(id: string, action: "pause" | "resume" | "retry"): Promise<EntityGovernanceTask> {
+    return request<EntityGovernanceTask>({
+      method: "POST",
+      url: `/entityresolution/jobs/${id}/${action}`,
+    });
+  },
+
+  decide(id: string, data: {
+    decision: "MERGE" | "REJECT" | "BLOCK" | "DEFER";
+    reason: string;
+    idempotencyKey: string;
+  }): Promise<EntityGovernanceTask> {
+    return request<EntityGovernanceTask>({
+      method: "POST",
+      url: `/entitygovernance/tasks/${id}/decision`,
+      data,
+      headers: { "Idempotency-Key": data.idempotencyKey },
+    });
+  },
+
+  startMaintenance(data: {
+    workspaceId: string;
+    operation: "ALIAS_MIGRATION" | "HISTORICAL_MENTION_BACKFILL" | "REDIRECT_COMPRESSION" | "ENTITY_REINDEX";
+    batchSize?: number;
+    idempotencyKey: string;
+  }): Promise<EntityGovernanceTask> {
+    return request<EntityGovernanceTask>({
+      method: "POST",
+      url: "/entitygovernance/maintenance",
+      data,
+      headers: { "Idempotency-Key": data.idempotencyKey },
+    });
+  },
+};
+
+export const entityMergeApi = {
+  preview(data: {
+    workspaceId: string;
+    entityIdA: string;
+    entityIdB: string;
+  }): Promise<EntityMergePreview> {
+    return request<EntityMergePreview>({
+      method: "POST",
+      url: "/entities/merge-preview",
+      data,
+    });
+  },
+
+  history(params?: { workspaceId?: string; limit?: number }): Promise<EntityMergeHistoryItem[]> {
+    return request<EntityMergeHistoryItem[]>({
+      method: "GET",
+      url: "/entities/merge-history",
+      params,
+    });
+  },
+
+  revert(mergeId: string, idempotencyKey: string): Promise<unknown> {
+    return request({
+      method: "POST",
+      url: `/entities/merges/${mergeId}/revert`,
+      data: { idempotencyKey },
+      headers: { "Idempotency-Key": idempotencyKey },
+    });
+  },
+};
+
 // ===== 标签 API =====
 
 export const terminologyApi = {
-  list(query?: string): Promise<Terminology[]> {
-    return request<Terminology[]>({ method: "GET", url: "/terminology", params: { query } });
+  list(params?: {
+    query?: string;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+    domain?: string;
+    reviewStatus?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<PagedResult<Terminology>> {
+    return request<PagedResult<Terminology>>({ method: "GET", url: "/terminology", params });
   },
   create(data: Omit<Terminology, "id" | "createdAt" | "updatedAt">): Promise<Terminology> {
     return request<Terminology>({ method: "POST", url: "/terminology", data });
@@ -525,6 +705,34 @@ export const terminologyApi = {
   },
   delete(id: string): Promise<boolean> {
     return request<boolean>({ method: "DELETE", url: `/terminology/${id}` });
+  },
+  bulk(items: Array<Omit<Terminology, "id" | "createdAt" | "updatedAt">>): Promise<TerminologyBulkResult> {
+    return request<TerminologyBulkResult>({
+      method: "POST", url: "/terminology/bulk", data: { items, skipConflicts: true },
+    });
+  },
+  review(id: string, status: "draft" | "pending" | "approved" | "rejected"): Promise<Terminology> {
+    return request<Terminology>({
+      method: "POST", url: `/terminology/${id}/review`, data: { status },
+    });
+  },
+  stats(): Promise<TerminologyStats> {
+    return request<TerminologyStats>({ method: "GET", url: "/terminology/stats" });
+  },
+  conflicts(): Promise<TerminologyConflict[]> {
+    return request<TerminologyConflict[]>({ method: "GET", url: "/terminology/conflicts" });
+  },
+  usage(terminologyIds: string[]): Promise<TerminologyUsage[]> {
+    return request<TerminologyUsage[]>({
+      method: "POST", url: "/terminology/usage", data: { terminologyIds },
+    });
+  },
+  extract(data: { topicId?: string; documentLimit?: number; candidateLimit?: number }): Promise<TerminologyCandidate[]> {
+    return request<TerminologyCandidate[]>({ method: "POST", url: "/terminology/extract", data });
+  },
+  async exportCsv(): Promise<Blob> {
+    const response = await apiClient.get("/terminology/export", { responseType: "blob" });
+    return response.data as Blob;
   },
 };
 
@@ -1155,6 +1363,31 @@ export const workspaceApi = {
   },
 };
 
+// ===== 桌面运行能力 API =====
+
+export const desktopRuntimeApi = {
+  getCapabilities(): Promise<DesktopCapabilities> {
+    return request<DesktopCapabilities>({
+      method: "GET",
+      url: "/desktop/capabilities",
+    });
+  },
+
+  getCloudConnection(): Promise<DesktopCloudConnectionStatus> {
+    return request<DesktopCloudConnectionStatus>({
+      method: "GET",
+      url: "/desktop/cloud-connection",
+    });
+  },
+
+  getState(): Promise<DesktopRuntimeState> {
+    return request<DesktopRuntimeState>({
+      method: "GET",
+      url: "/desktop/state",
+    });
+  },
+};
+
 // ===== Cloud Inbox API =====
 
 export const cloudInboxApi = {
@@ -1220,6 +1453,13 @@ export const bindingApi = {
     return request<CloudAccountBinding[]>({
       method: "GET",
       url: "/bindings/cloud-accounts",
+    });
+  },
+
+  listCloudWorkspaces(id: string): Promise<CloudWorkspaceDiscovery> {
+    return request<CloudWorkspaceDiscovery>({
+      method: "GET",
+      url: `/bindings/cloud-accounts/${encodeURIComponent(id)}/workspaces`,
     });
   },
 
@@ -1552,6 +1792,18 @@ export const mobileCaptureApi = {
 // ===== Runtime API =====
 
 export const runtimeApi = {
+  workspaceHealth(): Promise<WorkspaceRuntimeHealth> {
+    return request<WorkspaceRuntimeHealth>({
+      method: "GET",
+      url: "/runtime/workspace-health",
+    });
+  },
+  platformHealth(): Promise<RuntimeHealth> {
+    return request<RuntimeHealth>({
+      method: "GET",
+      url: "/runtime/platform-health",
+    });
+  },
   health(): Promise<RuntimeHealth> {
     return request<RuntimeHealth>({ method: "GET", url: "/runtime/health" });
   },

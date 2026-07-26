@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Boxes, Loader2, Search } from "lucide-react";
+import { Boxes, History, Loader2, Search, ShieldCheck } from "lucide-react";
 import { entityApi } from "@/lib/api";
 import {
   Card,
@@ -20,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import { buttonVariants } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -32,14 +34,16 @@ import { EntityTypeBadge, ENTITY_TYPES, getEntityTypeLabel } from "@/components/
 export default function EntitiesPage() {
   const router = useRouter();
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
   const { data: entities, isLoading } = useQuery({
-    queryKey: ["entities", entityTypeFilter, search],
+    queryKey: ["entities", entityTypeFilter, statusFilter, search],
     queryFn: () =>
       entityApi.list({
         entityType: entityTypeFilter !== "all" ? entityTypeFilter : undefined,
+        status: statusFilter !== "all" ? statusFilter : undefined,
         search: search || undefined,
       }),
   });
@@ -53,11 +57,17 @@ export default function EntitiesPage() {
   return (
     <div className="space-y-6">
       {/* 页头 */}
-      <div>
-        <h1 className="text-2xl font-bold">实体管理</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          浏览从文档中抽取的实体信息
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">实体管理</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            浏览从文档中抽取的实体信息
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Link className={buttonVariants({ variant: "outline", size: "sm" })} href="/entities/merge-history"><History className="mr-2 size-4" />合并历史</Link>
+          <Link className={buttonVariants({ size: "sm" })} href="/entities/governance"><ShieldCheck className="mr-2 size-4" />实体治理</Link>
+        </div>
       </div>
 
       {/* 筛选器 */}
@@ -66,6 +76,10 @@ export default function EntitiesPage() {
           <div className="flex items-center justify-between">
             <CardTitle>实体列表</CardTitle>
             <div className="flex gap-2">
+              <Select value={statusFilter} onValueChange={(value) => value && setStatusFilter(value)}>
+                <SelectTrigger size="sm" className="w-32"><SelectValue>{statusFilter === "active" ? "标准实体" : statusFilter === "merged" ? "已合并实体" : "全部状态"}</SelectValue></SelectTrigger>
+                <SelectContent><SelectItem value="active">标准实体</SelectItem><SelectItem value="merged">已合并实体</SelectItem><SelectItem value="all">全部状态</SelectItem></SelectContent>
+              </Select>
               <div className="relative">
                 <Input
                   placeholder="搜索实体..."

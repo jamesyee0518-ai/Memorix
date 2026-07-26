@@ -11,6 +11,7 @@ import {
   ExternalLink,
   LogIn,
   Loader2,
+  RefreshCw,
   Save,
   Shield,
   Unplug,
@@ -25,6 +26,8 @@ import {
 } from "@/lib/api";
 import type {
   CloudAccountBinding,
+  CloudWorkspaceDiscovery,
+  CloudWorkspaceSummary,
   CloudInboxStatus,
   CloudInboxPullStrategy,
   CloudInboxRetention,
@@ -52,6 +55,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 const MAX_SYNC_LOGS = 10;
@@ -180,6 +190,10 @@ export default function CloudInboxPage() {
   const [oauthClientId, setOauthClientId] = useState("memorix-desktop");
   const [authToken, setAuthToken] = useState("");
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountBinding[]>([]);
+  const [cloudWorkspaces, setCloudWorkspaces] = useState<CloudWorkspaceSummary[]>([]);
+  const [workspaceDiscovery, setWorkspaceDiscovery] =
+    useState<CloudWorkspaceDiscovery | null>(null);
+  const [isLoadingCloudWorkspaces, setIsLoadingCloudWorkspaces] = useState(false);
   const [workspaceBinding, setWorkspaceBinding] =
     useState<WorkspaceBinding | null>(null);
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string | null>(null);
@@ -202,6 +216,32 @@ export default function CloudInboxPage() {
         account.bindingStatus === "active"
     ) ?? cloudAccounts.find((account) => account.bindingStatus === "active");
   const isConnected = Boolean(activeCloudAccount && workspaceBinding);
+
+  const loadCloudWorkspaces = useCallback(
+    async (accountId: string, preferredWorkspaceId?: string) => {
+      setIsLoadingCloudWorkspaces(true);
+      try {
+        const discovery = await bindingApi.listCloudWorkspaces(accountId);
+        setWorkspaceDiscovery(discovery);
+        setCloudWorkspaces(discovery.workspaces);
+        const preferred = preferredWorkspaceId?.trim();
+        setCloudWorkspaceId((current) => {
+          if (preferred && discovery.workspaces.some((item) => item.id === preferred)) {
+            return preferred;
+          }
+          if (discovery.workspaces.length === 1) return discovery.workspaces[0].id;
+          return discovery.workspaces.some((item) => item.id === current) ? current : "";
+        });
+        if (!discovery.compatible && discovery.compatibilityMessage) {
+          toast.warning(discovery.compatibilityMessage);
+        }
+        return discovery;
+      } finally {
+        setIsLoadingCloudWorkspaces(false);
+      }
+    },
+    []
+  );
 
   const loadSyncLogs = useCallback(async () => {
     const logs = await cloudInboxApi.listLogs(MAX_SYNC_LOGS);
@@ -237,9 +277,20 @@ export default function CloudInboxPage() {
         setCurrentWorkspaceId(workspace?.id ?? null);
         if (workspace) {
           const bindings = await bindingApi.listWorkspaceBindings(workspace.id);
-          setWorkspaceBinding(
-            bindings.find((binding) => binding.bindingStatus === "active") ?? null
-          );
+          const activeBinding =
+            bindings.find((binding) => binding.bindingStatus === "active") ?? null;
+          setWorkspaceBinding(activeBinding);
+          const activeAccount = accounts.find(
+            (account) =>
+              account.id === activeBinding?.cloudAccountBindingId &&
+              account.bindingStatus === "active"
+          ) ?? accounts.find((account) => account.bindingStatus === "active");
+          if (activeAccount) {
+            await loadCloudWorkspaces(
+              activeAccount.id,
+              activeBinding?.cloudWorkspaceId ?? settings.cloudWorkspaceId
+            );
+          }
         }
         await loadSyncLogs();
       } catch (err) {
@@ -251,7 +302,7 @@ export default function CloudInboxPage() {
       }
     };
     load();
-  }, [loadSyncLogs]);
+  }, [loadCloudWorkspaces, loadSyncLogs]);
 
   useEffect(() => {
     if (!cloudEnabled) {
@@ -334,18 +385,29 @@ export default function CloudInboxPage() {
         const accounts = await bindingApi.listCloudAccounts();
         setCloudAccounts(accounts);
         setNeedsReauthentication(false);
-        if (currentWorkspaceId && cloudWorkspaceId.trim()) {
+        const discovery = await loadCloudWorkspaces(
+          status.cloudAccountBindingId,
+          cloudWorkspaceId
+        );
+        const selectedWorkspaceId =
+          discovery.workspaces.length === 1 ? discovery.workspaces[0].id : "";
+        if (currentWorkspaceId && selectedWorkspaceId && discovery.compatible) {
           const binding = await bindingApi.createWorkspaceBinding({
             localWorkspaceId: currentWorkspaceId,
             cloudAccountBindingId: status.cloudAccountBindingId,
-            cloudWorkspaceId: cloudWorkspaceId.trim(),
+            cloudWorkspaceId: selectedWorkspaceId,
             syncMode: "inbox_only",
             conflictPolicy: "manual",
           });
           setWorkspaceBinding(binding);
+          setCloudWorkspaceId(selectedWorkspaceId);
           setCloudEnabled(true);
         }
-        toast.success("云端账号已连接");
+        toast.success(
+          discovery.workspaces.length === 1
+            ? "云端账号和工作区已连接"
+            : "云端账号已连接，请选择工作区"
+        );
         return;
       }
       throw new Error("登录等待超时，请重新连接");
@@ -377,6 +439,9 @@ export default function CloudInboxPage() {
       setCloudAccounts((accounts) =>
         accounts.filter((account) => account.id !== activeCloudAccount.id)
       );
+      setCloudWorkspaces([]);
+      setWorkspaceDiscovery(null);
+      setCloudWorkspaceId("");
       setCloudEnabled(false);
       setNeedsReauthentication(false);
       setAuthToken("");
@@ -393,6 +458,25 @@ export default function CloudInboxPage() {
   const saveSettings = async (enabled = cloudEnabled) => {
     setIsSaving(true);
     try {
+      if (workspaceDiscovery && !workspaceDiscovery.compatible) {
+        throw new ApiRequestError(
+          workspaceDiscovery.compatibilityMessage || "云端 API 版本不兼容",
+          "CLOUD_API_INCOMPATIBLE",
+          409
+        );
+      }
+      if (activeCloudAccount && currentWorkspaceId && cloudWorkspaceId.trim() &&
+          workspaceBinding?.cloudWorkspaceId !== cloudWorkspaceId.trim()) {
+        if (workspaceBinding) await bindingApi.unbindWorkspace(workspaceBinding.id);
+        const binding = await bindingApi.createWorkspaceBinding({
+          localWorkspaceId: currentWorkspaceId,
+          cloudAccountBindingId: activeCloudAccount.id,
+          cloudWorkspaceId: cloudWorkspaceId.trim(),
+          syncMode: "inbox_only",
+          conflictPolicy: "manual",
+        });
+        setWorkspaceBinding(binding);
+      }
       const settings = await cloudInboxApi.updateSettings({
         enabled,
         pullStrategy,
@@ -417,7 +501,7 @@ export default function CloudInboxPage() {
   const handleToggleCloud = () => {
     if (!cloudEnabled) {
       if (!cloudApiBaseUrl.trim() || !cloudWorkspaceId.trim()) {
-        toast.error("请先填写云端 API 地址和云端工作区 ID");
+        toast.error("请先连接云端账号并选择云端工作区");
         return;
       }
       setPrivacyDialogOpen(true);
@@ -487,6 +571,9 @@ export default function CloudInboxPage() {
             <CloudOff className="size-5" />
           )}
           云端收件箱
+          <Badge className="border-blue-500/30 bg-blue-500/10 text-blue-600">
+            Beta
+          </Badge>
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           管理云端收件箱的启用、拉取策略与隐私设置
@@ -519,13 +606,66 @@ export default function CloudInboxPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="cloud-workspace-id">云端工作区 ID</Label>
-                  <Input
-                    id="cloud-workspace-id"
-                    placeholder="云端 workspace id"
-                    value={cloudWorkspaceId}
-                    onChange={(e) => setCloudWorkspaceId(e.target.value)}
-                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <Label htmlFor="cloud-workspace-id">云端工作区</Label>
+                    {activeCloudAccount && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={isLoadingCloudWorkspaces}
+                        onClick={() =>
+                          loadCloudWorkspaces(activeCloudAccount.id, cloudWorkspaceId)
+                            .catch((err) =>
+                              toast.error(
+                                err instanceof ApiRequestError
+                                  ? err.message
+                                  : "刷新云端工作区失败"
+                              )
+                            )
+                        }
+                      >
+                        <RefreshCw
+                          className={cn(
+                            "mr-1 size-3.5",
+                            isLoadingCloudWorkspaces && "animate-spin"
+                          )}
+                        />
+                        刷新
+                      </Button>
+                    )}
+                  </div>
+                  <Select
+                    value={cloudWorkspaceId || undefined}
+                    onValueChange={(value) => setCloudWorkspaceId(value ?? "")}
+                    disabled={!activeCloudAccount || isLoadingCloudWorkspaces}
+                  >
+                    <SelectTrigger id="cloud-workspace-id" className="w-full">
+                      <SelectValue
+                        placeholder={
+                          activeCloudAccount
+                            ? isLoadingCloudWorkspaces
+                              ? "正在加载工作区..."
+                              : "选择云端工作区"
+                            : "连接账号后自动加载"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {cloudWorkspaces.map((workspace) => (
+                        <SelectItem key={workspace.id} value={workspace.id}>
+                          {workspace.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {workspaceDiscovery && (
+                    <p className="text-xs text-muted-foreground">
+                      云端 API {workspaceDiscovery.cloudApiVersion ?? "版本未知"}
+                      {workspaceDiscovery.compatible ? " · 已兼容" : " · 需要升级"}
+                    </p>
+                  )}
                 </div>
               </div>
 

@@ -5,6 +5,7 @@ public class Document
     public Guid Id { get; set; }
     public Guid SourceId { get; set; }
     public Guid UserId { get; set; }
+    public Guid? WorkspaceId { get; set; }
     public Guid? TopicId { get; set; }
 
     public string Title { get; set; } = string.Empty;

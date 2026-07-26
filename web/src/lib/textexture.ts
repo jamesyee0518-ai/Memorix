@@ -28,6 +28,22 @@ export interface EntityGraphDocument {
   entities: Array<{ name: string; entityType: string; mentionCount?: number }>;
 }
 
+export interface CanonicalEntityGraph {
+  nodes: Array<{
+    id: string;
+    label: string;
+    entityType: string;
+    mentionCount: number;
+    degree: number;
+    documentIds: string[];
+  }>;
+  edges: Array<{
+    sourceEntityId: string;
+    targetEntityId: string;
+    weight: number;
+  }>;
+}
+
 function entityCategory(value: string): TextGraphNode["category"] | null {
   const type = value.toLocaleLowerCase();
   if (/^(org|organization)$|company|organisation|brand|公司|组织|企业|机构/.test(type)) return "company";
@@ -35,6 +51,31 @@ function entityCategory(value: string): TextGraphNode["category"] | null {
   if (/^(per|person)$|people|人物|人名|创始人|作者/.test(type)) return "person";
   if (/technology|tech|framework|language|model|protocol|algorithm|技术|框架|语言|模型|协议|算法/.test(type)) return "technology";
   return null;
+}
+
+export function buildCanonicalEntityGraph(graph: CanonicalEntityGraph): TextGraph {
+  const nodes = graph.nodes.map((node) => ({
+    id: node.id,
+    label: node.label,
+    frequency: Math.max(1, node.mentionCount),
+    degree: node.degree,
+    category: entityCategory(node.entityType) ?? "technology",
+    documentIds: node.documentIds,
+  }));
+  const edges = graph.edges
+    .filter((edge) => edge.sourceEntityId !== edge.targetEntityId)
+    .map((edge) => ({
+      source: edge.sourceEntityId,
+      target: edge.targetEntityId,
+      weight: edge.weight,
+      narrativeWeight: 0,
+      landscapeWeight: edge.weight,
+    }));
+  return {
+    nodes,
+    edges,
+    tokenCount: nodes.reduce((sum, node) => sum + node.frequency, 0),
+  };
 }
 
 export function buildEntityCooccurrenceGraph(documents: EntityGraphDocument[], maxNodes = 100): TextGraph {

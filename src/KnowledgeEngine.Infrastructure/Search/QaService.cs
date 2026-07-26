@@ -211,6 +211,7 @@ public class QaService : IQaService
                     string.Join("\n\n", searchResults.Take(3).Select((r, index) => $"- [{index + 1}] {r.Title}: {r.Snippet}"));
 
                 var lowRelevanceCitations = BuildCitations(searchResults.Take(3).ToList());
+                await EnrichCitationEntitiesAsync(lowRelevanceCitations, ct);
                 var lowRelevanceMessage = new QaMessage
                 {
                     Id = Guid.NewGuid(),
@@ -262,6 +263,7 @@ public class QaService : IQaService
 
             // Step 5: Build RAG context
             var (ragContext, citations) = BuildRagContext(rerankedChunks);
+            await EnrichCitationEntitiesAsync(citations, ct);
 
             // Step 6: Build prompts
             var systemPrompt = BuildSystemPrompt();
@@ -294,6 +296,10 @@ public class QaService : IQaService
             }
 
             var (validatedAnswer, citationValidationIssues) = ValidateAndRepairCitations(answerContent, citations);
+            citationValidationIssues.AddRange(await ValidateCitationEntitiesAsync(
+                citations,
+                searchResponse.Data?.DebugInfo?.RecognizedEntityIds ?? [],
+                ct));
             answerContent = validatedAnswer;
 
             sw.Stop();
@@ -685,6 +691,107 @@ public class QaService : IQaService
             issues.Add("回答未包含有效引用，已补充来源编号");
         }
         return (repaired, issues);
+    }
+
+    private async Task<IReadOnlyList<string>> ValidateCitationEntitiesAsync(
+        IReadOnlyList<Citation> citations,
+        IReadOnlyList<Guid> entityIds,
+        CancellationToken ct)
+    {
+        if (citations.Count == 0 || entityIds.Count == 0) return [];
+        var chunkIds = citations.Select(x => x.ChunkId).Distinct().ToList();
+        var directEvidence = await _db.EntityMentions.AsNoTracking()
+            .Where(x => x.EntityId.HasValue
+                && entityIds.Contains(x.EntityId.Value)
+                && x.ChunkId.HasValue
+                && chunkIds.Contains(x.ChunkId.Value))
+            .Select(x => x.ChunkId!.Value)
+            .Distinct()
+            .ToListAsync(ct);
+        var names = await _db.Entities.AsNoTracking()
+            .Where(x => entityIds.Contains(x.Id))
+            .Select(x => new
+            {
+                x.Name,
+                x.CanonicalName,
+                x.PreferredNameZh,
+                x.PreferredNameEn,
+                x.Abbreviation
+            })
+            .ToListAsync(ct);
+        var aliases = await _db.EntityAliases.AsNoTracking()
+            .Where(x => entityIds.Contains(x.EntityId) && x.IsVerified)
+            .Select(x => x.Alias)
+            .ToListAsync(ct);
+        var terms = names.SelectMany(x => new[]
+            {
+                x.Name,
+                x.CanonicalName,
+                x.PreferredNameZh,
+                x.PreferredNameEn,
+                x.Abbreviation
+            })
+            .Concat(aliases)
+            .Where(x => !string.IsNullOrWhiteSpace(x) && x!.Length >= 2)
+            .Select(x => x!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var directSet = directEvidence.ToHashSet();
+        var issues = new List<string>();
+        foreach (var citation in citations)
+        {
+            var originalEvidence = citation.OriginalSnippet ?? citation.Snippet;
+            var containsEntity = terms.Any(term =>
+                originalEvidence.Contains(term, StringComparison.OrdinalIgnoreCase));
+            if (!directSet.Contains(citation.ChunkId) && !containsEntity)
+            {
+                issues.Add(
+                    $"引用 [{citation.Index}] 的原始证据块未直接出现已识别实体，需人工核查。");
+            }
+        }
+        return issues;
+    }
+
+    private async Task EnrichCitationEntitiesAsync(
+        IReadOnlyList<Citation> citations,
+        CancellationToken ct)
+    {
+        if (citations.Count == 0) return;
+        var chunkIds = citations.Select(x => x.ChunkId).Distinct().ToList();
+        var rows = await (
+            from mention in _db.EntityMentions.AsNoTracking()
+            join entity in _db.Entities.AsNoTracking()
+                on mention.EntityId equals entity.Id
+            where mention.ChunkId.HasValue
+                && chunkIds.Contains(mention.ChunkId.Value)
+                && entity.Status != "merged"
+            select new
+            {
+                ChunkId = mention.ChunkId!.Value,
+                EntityId = entity.Id,
+                PreferredName = entity.PreferredNameZh
+                    ?? entity.CanonicalName
+                    ?? entity.Name,
+                OriginalMention = mention.MentionText,
+                mention.ExtractionConfidence
+            }
+        ).ToListAsync(ct);
+        var byChunk = rows.GroupBy(x => x.ChunkId).ToDictionary(
+            x => x.Key,
+            x => (IReadOnlyList<CitationEntityReference>)x
+                .OrderByDescending(y => y.ExtractionConfidence)
+                .GroupBy(y => y.EntityId)
+                .Select(y => y.First())
+                .Take(10)
+                .Select(y => new CitationEntityReference
+                {
+                    EntityId = y.EntityId,
+                    PreferredName = y.PreferredName,
+                    OriginalMention = y.OriginalMention
+                })
+                .ToList());
+        foreach (var citation in citations)
+            citation.Entities = byChunk.GetValueOrDefault(citation.ChunkId, []);
     }
 
     private static QaDebugInfo BuildDebugInfo(

@@ -6,6 +6,8 @@ using KnowledgeEngine.Infrastructure.Search;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using KnowledgeEngine.Application.Settings;
 using Xunit;
 
 namespace KnowledgeEngine.Infrastructure.Tests;
@@ -38,14 +40,17 @@ public class TokenizedKeywordSearchTests
         db.DocumentChunks.Add(new DocumentChunk
         {
             Id = Guid.NewGuid(), DocumentId = documentId, SourceId = sourceId, UserId = userId,
-            ChunkIndex = 0, Content = "OpenAI 已经正式发布 GPT-5.6 系列模型。",
-            ContentOriginal = "OpenAI 已经正式发布 GPT-5.6 系列模型。",
+            ChunkIndex = 0, Content = "OpenAI 已经正式发布 GPT-5.6 大型语言模型。",
+            ContentOriginal = "OpenAI 已经正式发布 GPT-5.6 大型语言模型。",
             CreatedAt = now, UpdatedAt = now
         });
         await db.SaveChangesAsync();
 
         var service = new SearchService(
             db, null!, null!, new RetrievalFusionService(), new ChineseTokenizer(),
+            new EntityQueryExpansionService(
+                db, new EntityRedirectResolver(db), new ChineseTokenizer(),
+                Options.Create(new EntityResolutionSettings())),
             NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(userId, new SearchRequest
         {
@@ -57,5 +62,57 @@ public class TokenizedKeywordSearchTests
         Assert.True(result.Success);
         Assert.Contains(result.Data!.Items, item => item.DocumentId == documentId);
         Assert.Contains(result.Data.Items, item => item.ScoreDetail!.KeywordScore > 0);
+
+        var entityId = Guid.NewGuid();
+        var workspaceId = Guid.NewGuid().ToString();
+        db.Entities.Add(new Entity
+        {
+            Id = entityId,
+            UserId = userId,
+            WorkspaceId = workspaceId,
+            Name = "大型语言模型",
+            CanonicalName = "大型语言模型",
+            PreferredNameZh = "大型语言模型",
+            PreferredNameEn = "Large Language Model",
+            Abbreviation = "LLM",
+            NormalizedName = "大型语言模型",
+            NormalizedKey = "大型语言模型",
+            EntityType = "TECHNOLOGY",
+            Status = "active",
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        db.EntityAliases.Add(new EntityAlias
+        {
+            Id = Guid.NewGuid(),
+            EntityId = entityId,
+            UserId = userId,
+            WorkspaceId = workspaceId,
+            Alias = "LLM",
+            NormalizedAlias = "llm",
+            AliasType = "ABBREVIATION",
+            SourceType = "manual",
+            IsVerified = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        db.DocumentEntities.Add(new DocumentEntity
+        {
+            DocumentId = documentId,
+            EntityId = entityId,
+            MentionCount = 1,
+            CreatedAt = now
+        });
+        await db.SaveChangesAsync();
+
+        var aliasResult = await service.SearchAsync(userId, new SearchRequest
+        {
+            Query = "LLM 有哪些最新进展？",
+            SearchType = "keyword",
+            Limit = 20
+        });
+        Assert.True(aliasResult.Success);
+        Assert.Contains(aliasResult.Data!.Items, item => item.DocumentId == documentId);
+        Assert.Contains(entityId, aliasResult.Data.DebugInfo!.RecognizedEntityIds);
     }
 }

@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 import { ApiRequestError, cloudInboxApi, runtimeApi, workspaceApi } from "@/lib/api";
-import type { CloudInboxStatus, CloudInboxSyncLog, RuntimeHealth, Workspace } from "@/lib/types";
+import type { CloudInboxStatus, CloudInboxSyncLog, WorkspaceRuntimeHealth, Workspace } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -130,7 +130,7 @@ export function HybridDataFlowPanel({
   compact?: boolean;
 }) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [health, setHealth] = useState<RuntimeHealth | null>(null);
+  const [health, setHealth] = useState<WorkspaceRuntimeHealth | null>(null);
   const [cloudStatus, setCloudStatus] = useState<CloudInboxStatus | null>(null);
   const [logs, setLogs] = useState<CloudInboxSyncLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,7 +145,7 @@ export function HybridDataFlowPanel({
       try {
         const [currentWorkspace, runtimeHealth, status, syncLogs] = await Promise.all([
           workspaceApi.getCurrent().catch(() => null),
-          runtimeApi.health().catch(() => null),
+          runtimeApi.workspaceHealth().catch(() => null),
           cloudInboxApi.getStatus().catch(() => null),
           cloudInboxApi.listLogs(1).catch(() => [] as CloudInboxSyncLog[]),
         ]);
@@ -177,8 +177,8 @@ export function HybridDataFlowPanel({
     (Boolean(workspace?.cloudApiBaseUrl) && Boolean(workspace?.cloudWorkspaceId));
   const inboxEnabled = Boolean(workspace?.inboxEnabled || cloudStatus?.enabled);
   const pullStep = getPullStep(latestLog, inboxEnabled);
-  const databaseReady = isHealthy(health?.database);
-  const modelReady = isHealthy(health?.llmService) || workspace?.modelProvider === "ollama" || workspace?.modelProvider === "lmstudio";
+  const databaseReady = isHealthy(health?.knowledgeStorage);
+  const modelReady = isHealthy(health?.aiService) || workspace?.modelProvider === "ollama" || workspace?.modelProvider === "lmstudio";
 
   const steps = useMemo<FlowStep[]>(() => [
     {

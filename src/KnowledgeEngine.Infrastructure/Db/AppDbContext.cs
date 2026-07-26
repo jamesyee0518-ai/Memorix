@@ -23,6 +23,15 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<Tag> Tags => Set<Tag>();
     public DbSet<DocumentTag> DocumentTags => Set<DocumentTag>();
     public DbSet<Entity> Entities => Set<Entity>();
+    public DbSet<EntityAlias> EntityAliases => Set<EntityAlias>();
+    public DbSet<EntityMention> EntityMentions => Set<EntityMention>();
+    public DbSet<EntityExternalId> EntityExternalIds => Set<EntityExternalId>();
+    public DbSet<EntityResolutionCandidate> EntityResolutionCandidates => Set<EntityResolutionCandidate>();
+    public DbSet<EntityEmbedding> EntityEmbeddings => Set<EntityEmbedding>();
+    public DbSet<EntityGovernanceTask> EntityGovernanceTasks => Set<EntityGovernanceTask>();
+    public DbSet<EntityMergeLog> EntityMergeLogs => Set<EntityMergeLog>();
+    public DbSet<EntityMergeBlocklist> EntityMergeBlocklist => Set<EntityMergeBlocklist>();
+    public DbSet<EntityOutboxEvent> EntityOutboxEvents => Set<EntityOutboxEvent>();
     public DbSet<DocumentEntity> DocumentEntities => Set<DocumentEntity>();
     public DbSet<EntityRelation> EntityRelations => Set<EntityRelation>();
     public DbSet<AiJob> AiJobs => Set<AiJob>();
@@ -100,6 +109,15 @@ public class AppDbContext : DbContext, IAppDbContext
         ConfigureTag(modelBuilder);
         ConfigureDocumentTag(modelBuilder);
         ConfigureEntity(modelBuilder);
+        ConfigureEntityAlias(modelBuilder);
+        ConfigureEntityMention(modelBuilder);
+        ConfigureEntityExternalId(modelBuilder);
+        ConfigureEntityResolutionCandidate(modelBuilder);
+        ConfigureEntityEmbedding(modelBuilder);
+        ConfigureEntityGovernanceTask(modelBuilder);
+        ConfigureEntityMergeLog(modelBuilder);
+        ConfigureEntityMergeBlocklist(modelBuilder);
+        ConfigureEntityOutboxEvent(modelBuilder);
         ConfigureDocumentEntity(modelBuilder);
         ConfigureEntityRelation(modelBuilder);
         ConfigureAiJob(modelBuilder);
@@ -175,6 +193,7 @@ public class AppDbContext : DbContext, IAppDbContext
             var statements = new[]
             {
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title_original varchar(1000)",
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS workspace_id uuid",
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title_zh varchar(1000)",
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS summary_zh text",
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS keywords_zh text",
@@ -215,6 +234,7 @@ public class AppDbContext : DbContext, IAppDbContext
         {
             var documents = new Dictionary<string, string>
             {
+                ["workspace_id"] = "TEXT",
                 ["title_original"] = "TEXT", ["title_zh"] = "TEXT", ["summary_zh"] = "TEXT", ["keywords_zh"] = "TEXT",
                 ["localization_model"] = "TEXT", ["localization_prompt_version"] = "TEXT", ["localized_at"] = "TEXT",
                 ["localization_quality_score"] = "INTEGER", ["localization_quality_issues"] = "TEXT", ["glossary_version"] = "TEXT",
@@ -250,6 +270,23 @@ public class AppDbContext : DbContext, IAppDbContext
         }
 
         await Database.ExecuteSqlRawAsync("UPDATE documents SET title_original = title WHERE title_original IS NULL", ct);
+        if (Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await Database.ExecuteSqlRawAsync("""
+                UPDATE documents d SET workspace_id = (
+                    SELECT w.id FROM workspaces w WHERE w.user_id = d.user_id ORDER BY w.created_at LIMIT 1
+                ) WHERE d.workspace_id IS NULL
+                """, ct);
+        }
+        else if (await SqliteColumnExistsAsync("documents", "user_id", ct)
+                 && await SqliteTableExistsAsync("workspaces", ct))
+        {
+            await Database.ExecuteSqlRawAsync("""
+                UPDATE documents SET workspace_id = (
+                    SELECT id FROM workspaces WHERE workspaces.user_id = documents.user_id ORDER BY created_at LIMIT 1
+                ) WHERE workspace_id IS NULL
+                """, ct);
+        }
         await Database.ExecuteSqlRawAsync("UPDATE documents SET primary_language = language WHERE primary_language IS NULL AND language IS NOT NULL", ct);
         await Database.ExecuteSqlRawAsync("UPDATE document_chunks SET content_original = content WHERE content_original = ''", ct);
         await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS ix_documents_primary_language ON documents(primary_language)", ct);
@@ -285,7 +322,30 @@ public class AppDbContext : DbContext, IAppDbContext
             )
             """;
         await Database.ExecuteSqlRawAsync(terminologySql, ct);
-        await Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS ix_terminology_user_pair ON terminology(user_id, source_term, target_term)", ct);
+        if (Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await Database.ExecuteSqlRawAsync("""
+                UPDATE terminology t SET workspace_id = (
+                    SELECT w.id FROM workspaces w WHERE w.user_id = t.user_id ORDER BY w.created_at LIMIT 1
+                ) WHERE t.workspace_id IS NULL
+                """, ct);
+        }
+        else if (await SqliteTableExistsAsync("workspaces", ct))
+        {
+            await Database.ExecuteSqlRawAsync("""
+                UPDATE terminology SET workspace_id = (
+                    SELECT id FROM workspaces WHERE workspaces.user_id = terminology.user_id ORDER BY created_at LIMIT 1
+                ) WHERE workspace_id IS NULL
+                """, ct);
+        }
+        await Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS ix_terminology_user_pair", ct);
+        await Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS idx_terminology_user_pair", ct);
+        await Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS \"IX_terminology_UserId_SourceTerm_TargetTerm\"", ct);
+        await Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS \"IX_terminology_user_id_source_term_target_term\"", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_terminology_workspace_pair ON terminology(user_id, workspace_id, source_language, source_term, target_language, target_term)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_terminology_workspace_review ON terminology(user_id, workspace_id, review_status, priority)", ct);
 
         var localizationSql = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
             ? """
@@ -369,6 +429,392 @@ public class AppDbContext : DbContext, IAppDbContext
                 "CREATE INDEX IF NOT EXISTS ix_multilingual_jobs_user_status ON multilingual_batch_jobs(user_id, status, created_at)", ct);
             await Database.ExecuteSqlRawAsync(
                 "CREATE INDEX IF NOT EXISTS ix_multilingual_jobs_document_type ON multilingual_batch_jobs(document_id, job_type)", ct);
+        }
+    }
+
+    /// <summary>
+    /// Upgrades legacy databases to the entity identity/mention/alias model.
+    /// The operation is idempotent because desktop databases are evolved at startup.
+    /// </summary>
+    public async Task EnsureEntityResolutionSetupAsync(CancellationToken ct = default)
+    {
+        var isPostgres = Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true;
+        // Older builds used a user-scoped uniqueness constraint. Entity identity is
+        // workspace-scoped now, so retaining that index can reject valid entities in
+        // a second workspace owned by the same user.
+        await Database.ExecuteSqlRawAsync(
+            "DROP INDEX IF EXISTS \"IX_entities_UserId_NormalizedName_EntityType\"", ct);
+        await Database.ExecuteSqlRawAsync(
+            "DROP INDEX IF EXISTS ix_entities_user_id_normalized_name_entity_type", ct);
+
+        if (isPostgres)
+        {
+            var entityColumns = new[]
+            {
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS canonical_name varchar(500)",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS preferred_name_zh varchar(500)",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS preferred_name_en varchar(500)",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS abbreviation varchar(100)",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS normalized_key varchar(500)",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS entity_status varchar(30) NOT NULL DEFAULT 'active'",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS merged_into_id uuid",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS entity_confidence numeric(6,5)",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS source_count integer NOT NULL DEFAULT 0",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS mention_count integer NOT NULL DEFAULT 0",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS row_version bigint NOT NULL DEFAULT 0",
+                "ALTER TABLE entities ADD COLUMN IF NOT EXISTS normalization_version varchar(30) NOT NULL DEFAULT 'entity_norm_v1'"
+            };
+            foreach (var statement in entityColumns)
+                await Database.ExecuteSqlRawAsync(statement, ct);
+
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_aliases (
+                    id uuid PRIMARY KEY, entity_id uuid NOT NULL, user_id uuid NOT NULL,
+                    workspace_id varchar(200) NOT NULL, alias varchar(500) NOT NULL,
+                    normalized_alias varchar(500) NOT NULL, language_code varchar(20),
+                    alias_type varchar(40) NOT NULL, source_type varchar(40) NOT NULL,
+                    source_id varchar(200), confidence numeric(6,5), is_verified boolean NOT NULL DEFAULT false,
+                    valid_from timestamp with time zone, valid_to timestamp with time zone,
+                    normalization_version varchar(30) NOT NULL,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_mentions (
+                    id uuid PRIMARY KEY, user_id uuid NOT NULL, workspace_id varchar(200) NOT NULL,
+                    document_id uuid NOT NULL, chunk_id uuid, entity_id uuid,
+                    mention_text varchar(1000) NOT NULL, normalized_mention varchar(500) NOT NULL,
+                    suggested_type varchar(50) NOT NULL, context_text varchar(4000),
+                    start_offset integer, end_offset integer, occurrence_count integer NOT NULL DEFAULT 1,
+                    extraction_batch_id uuid NOT NULL, extraction_model varchar(200), model_version varchar(100),
+                    prompt_version varchar(100), schema_version varchar(50) NOT NULL,
+                    extraction_confidence numeric(6,5), resolution_status varchar(40) NOT NULL,
+                    resolution_method varchar(50), resolution_score numeric(6,5),
+                    resolver_version varchar(50) NOT NULL, reason_codes text,
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_external_ids (
+                    id uuid PRIMARY KEY, entity_id uuid NOT NULL, user_id uuid NOT NULL,
+                    workspace_id varchar(200) NOT NULL, id_type varchar(100) NOT NULL,
+                    id_value varchar(500) NOT NULL, source varchar(100) NOT NULL,
+                    is_verified boolean NOT NULL DEFAULT false, confidence numeric(6,5),
+                    created_at timestamp with time zone NOT NULL, updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_resolution_candidates (
+                    id uuid PRIMARY KEY, mention_id uuid NOT NULL, candidate_entity_id uuid NOT NULL,
+                    workspace_id varchar(200) NOT NULL, candidate_rank integer NOT NULL,
+                    name_score numeric(6,5) NOT NULL DEFAULT 0, alias_score numeric(6,5) NOT NULL DEFAULT 0,
+                    description_score numeric(6,5) NOT NULL DEFAULT 0, context_score numeric(6,5) NOT NULL DEFAULT 0,
+                    relation_score numeric(6,5) NOT NULL DEFAULT 0, source_score numeric(6,5) NOT NULL DEFAULT 0,
+                    total_score numeric(6,5) NOT NULL DEFAULT 0, decision varchar(40) NOT NULL,
+                    reason_codes text, resolver_version varchar(50) NOT NULL,
+                    llm_decision varchar(40), llm_confidence numeric(6,5),
+                    llm_explanation text, llm_model varchar(200),
+                    llm_prompt_version varchar(100),
+                    llm_input_tokens integer, llm_output_tokens integer,
+                    created_at timestamp with time zone NOT NULL)
+                """, ct);
+            foreach (var statement in new[]
+            {
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_decision varchar(40)",
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_confidence numeric(6,5)",
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_explanation text",
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_model varchar(200)",
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_prompt_version varchar(100)",
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_input_tokens integer",
+                "ALTER TABLE entity_resolution_candidates ADD COLUMN IF NOT EXISTS llm_output_tokens integer"
+            })
+                await Database.ExecuteSqlRawAsync(statement, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_embeddings (
+                    id uuid PRIMARY KEY, entity_id uuid NOT NULL,
+                    workspace_id varchar(200) NOT NULL, provider varchar(100) NOT NULL,
+                    model varchar(200) NOT NULL, model_version varchar(100),
+                    dimension integer, embedding_type varchar(40) NOT NULL,
+                    embedding_json text, content_hash varchar(128) NOT NULL,
+                    status varchar(50) NOT NULL, error_message text,
+                    retry_count integer NOT NULL DEFAULT 0,
+                    created_at timestamp with time zone NOT NULL,
+                    updated_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_governance_tasks (
+                    id uuid PRIMARY KEY, user_id uuid NOT NULL,
+                    workspace_id varchar(200) NOT NULL, task_type varchar(50) NOT NULL,
+                    parent_task_id uuid, subject_entity_id uuid, candidate_entity_id uuid,
+                    mention_id uuid, status varchar(30) NOT NULL, priority integer NOT NULL DEFAULT 0,
+                    assignee_id uuid, idempotency_key varchar(200), cursor varchar(500),
+                    total_items integer NOT NULL DEFAULT 0, processed_items integer NOT NULL DEFAULT 0,
+                    succeeded_items integer NOT NULL DEFAULT 0, failed_items integer NOT NULL DEFAULT 0,
+                    score numeric(6,5), reason_codes text, payload text, result text,
+                    retry_count integer NOT NULL DEFAULT 0, error_message text,
+                    created_at timestamp with time zone NOT NULL,
+                    updated_at timestamp with time zone NOT NULL,
+                    started_at timestamp with time zone, completed_at timestamp with time zone)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_merge_logs (
+                    id uuid PRIMARY KEY, user_id uuid NOT NULL, workspace_id varchar(200) NOT NULL,
+                    batch_id uuid NOT NULL, source_entity_id uuid NOT NULL, target_entity_id uuid NOT NULL,
+                    reason varchar(2000) NOT NULL, method varchar(50) NOT NULL,
+                    score numeric(6,5), operator_id uuid, device_id varchar(200), request_id varchar(200),
+                    before_snapshot text NOT NULL, migration_summary text,
+                    expected_source_version bigint NOT NULL, expected_target_version bigint NOT NULL,
+                    status varchar(30) NOT NULL, idempotency_key varchar(200) NOT NULL,
+                    created_at timestamp with time zone NOT NULL,
+                    completed_at timestamp with time zone, reverted_at timestamp with time zone)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_merge_blocklist (
+                    id uuid PRIMARY KEY, user_id uuid NOT NULL, workspace_id varchar(200) NOT NULL,
+                    entity_id_a uuid NOT NULL, entity_id_b uuid NOT NULL,
+                    reason varchar(2000) NOT NULL, source varchar(50) NOT NULL,
+                    operator_id uuid, is_permanent boolean NOT NULL DEFAULT true,
+                    valid_until timestamp with time zone, created_at timestamp with time zone NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_outbox_events (
+                    id uuid PRIMARY KEY, user_id uuid NOT NULL, workspace_id varchar(200) NOT NULL,
+                    entity_id uuid NOT NULL, event_type varchar(50) NOT NULL,
+                    entity_version bigint NOT NULL, payload text NOT NULL,
+                    idempotency_key varchar(250) NOT NULL, status varchar(30) NOT NULL,
+                    retry_count integer NOT NULL DEFAULT 0, error_message text,
+                    created_at timestamp with time zone NOT NULL,
+                    processed_at timestamp with time zone)
+                """, ct);
+
+            await Database.ExecuteSqlRawAsync("""
+                UPDATE entities
+                SET canonical_name = COALESCE(canonical_name, name),
+                    normalized_key = COALESCE(normalized_key, normalized_name, lower(name)),
+                    entity_status = COALESCE(NULLIF(entity_status, ''), 'active'),
+                    normalization_version = COALESCE(NULLIF(normalization_version, ''), 'entity_norm_v1')
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                UPDATE entities e SET workspace_id = (
+                    SELECT w.id::text FROM workspaces w
+                    WHERE w.user_id = e.user_id ORDER BY w.created_at LIMIT 1
+                ) WHERE workspace_id IS NULL OR workspace_id = '' OR workspace_id = 'default'
+                """, ct);
+        }
+        else if (Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            var columns = new Dictionary<string, string>
+            {
+                ["canonical_name"] = "TEXT",
+                ["preferred_name_zh"] = "TEXT",
+                ["preferred_name_en"] = "TEXT",
+                ["abbreviation"] = "TEXT",
+                ["normalized_key"] = "TEXT",
+                ["entity_status"] = "TEXT NOT NULL DEFAULT 'active'",
+                ["merged_into_id"] = "TEXT",
+                ["entity_confidence"] = "REAL",
+                ["source_count"] = "INTEGER NOT NULL DEFAULT 0",
+                ["mention_count"] = "INTEGER NOT NULL DEFAULT 0",
+                ["row_version"] = "INTEGER NOT NULL DEFAULT 0",
+                ["normalization_version"] = "TEXT NOT NULL DEFAULT 'entity_norm_v1'"
+            };
+            foreach (var column in columns)
+                await AddSqliteColumnIfMissingAsync("entities", column.Key, column.Value, ct);
+
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_aliases (
+                    id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL, alias TEXT NOT NULL, normalized_alias TEXT NOT NULL,
+                    language_code TEXT, alias_type TEXT NOT NULL, source_type TEXT NOT NULL,
+                    source_id TEXT, confidence REAL, is_verified INTEGER NOT NULL DEFAULT 0,
+                    valid_from TEXT, valid_to TEXT, normalization_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_mentions (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL, chunk_id TEXT, entity_id TEXT,
+                    mention_text TEXT NOT NULL, normalized_mention TEXT NOT NULL,
+                    suggested_type TEXT NOT NULL, context_text TEXT, start_offset INTEGER,
+                    end_offset INTEGER, occurrence_count INTEGER NOT NULL DEFAULT 1,
+                    extraction_batch_id TEXT NOT NULL, extraction_model TEXT, model_version TEXT,
+                    prompt_version TEXT, schema_version TEXT NOT NULL, extraction_confidence REAL,
+                    resolution_status TEXT NOT NULL, resolution_method TEXT, resolution_score REAL,
+                    resolver_version TEXT NOT NULL, reason_codes TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_external_ids (
+                    id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL, id_type TEXT NOT NULL, id_value TEXT NOT NULL,
+                    source TEXT NOT NULL, is_verified INTEGER NOT NULL DEFAULT 0, confidence REAL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_resolution_candidates (
+                    id TEXT PRIMARY KEY, mention_id TEXT NOT NULL, candidate_entity_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL, candidate_rank INTEGER NOT NULL,
+                    name_score REAL NOT NULL DEFAULT 0, alias_score REAL NOT NULL DEFAULT 0,
+                    description_score REAL NOT NULL DEFAULT 0, context_score REAL NOT NULL DEFAULT 0,
+                    relation_score REAL NOT NULL DEFAULT 0, source_score REAL NOT NULL DEFAULT 0,
+                    total_score REAL NOT NULL DEFAULT 0, decision TEXT NOT NULL,
+                    reason_codes TEXT, resolver_version TEXT NOT NULL,
+                    llm_decision TEXT, llm_confidence REAL, llm_explanation TEXT,
+                    llm_model TEXT, llm_prompt_version TEXT,
+                    llm_input_tokens INTEGER, llm_output_tokens INTEGER,
+                    created_at TEXT NOT NULL)
+                """, ct);
+            foreach (var column in new Dictionary<string, string>
+            {
+                ["llm_decision"] = "TEXT",
+                ["llm_confidence"] = "REAL",
+                ["llm_explanation"] = "TEXT",
+                ["llm_model"] = "TEXT",
+                ["llm_prompt_version"] = "TEXT",
+                ["llm_input_tokens"] = "INTEGER",
+                ["llm_output_tokens"] = "INTEGER"
+            })
+                await AddSqliteColumnIfMissingAsync(
+                    "entity_resolution_candidates", column.Key, column.Value, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_embeddings (
+                    id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, model_version TEXT,
+                    dimension INTEGER, embedding_type TEXT NOT NULL, embedding_json TEXT,
+                    content_hash TEXT NOT NULL, status TEXT NOT NULL, error_message TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_governance_tasks (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    task_type TEXT NOT NULL, parent_task_id TEXT, subject_entity_id TEXT,
+                    candidate_entity_id TEXT, mention_id TEXT, status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0, assignee_id TEXT, idempotency_key TEXT,
+                    cursor TEXT, total_items INTEGER NOT NULL DEFAULT 0,
+                    processed_items INTEGER NOT NULL DEFAULT 0,
+                    succeeded_items INTEGER NOT NULL DEFAULT 0,
+                    failed_items INTEGER NOT NULL DEFAULT 0, score REAL,
+                    reason_codes TEXT, payload TEXT, result TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0, error_message TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    started_at TEXT, completed_at TEXT)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_merge_logs (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    batch_id TEXT NOT NULL, source_entity_id TEXT NOT NULL,
+                    target_entity_id TEXT NOT NULL, reason TEXT NOT NULL, method TEXT NOT NULL,
+                    score REAL, operator_id TEXT, device_id TEXT, request_id TEXT,
+                    before_snapshot TEXT NOT NULL, migration_summary TEXT,
+                    expected_source_version INTEGER NOT NULL,
+                    expected_target_version INTEGER NOT NULL, status TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL,
+                    completed_at TEXT, reverted_at TEXT)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_merge_blocklist (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    entity_id_a TEXT NOT NULL, entity_id_b TEXT NOT NULL,
+                    reason TEXT NOT NULL, source TEXT NOT NULL, operator_id TEXT,
+                    is_permanent INTEGER NOT NULL DEFAULT 1, valid_until TEXT, created_at TEXT NOT NULL)
+                """, ct);
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS entity_outbox_events (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+                    entity_id TEXT NOT NULL, event_type TEXT NOT NULL,
+                    entity_version INTEGER NOT NULL, payload TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL, status TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0, error_message TEXT,
+                    created_at TEXT NOT NULL, processed_at TEXT)
+                """, ct);
+
+            if (await SqliteColumnExistsAsync("entities", "Name", ct))
+            {
+                await Database.ExecuteSqlRawAsync("""
+                    UPDATE entities
+                    SET canonical_name = COALESCE(canonical_name, "Name"),
+                        normalized_key = COALESCE(normalized_key, "NormalizedName", lower("Name")),
+                        entity_status = COALESCE(NULLIF(entity_status, ''), 'active'),
+                        normalization_version = COALESCE(NULLIF(normalization_version, ''), 'entity_norm_v1')
+                    """, ct);
+                if (await SqliteColumnExistsAsync("entities", "WorkspaceId", ct)
+                    && await SqliteColumnExistsAsync("workspaces", "Id", ct))
+                {
+                    await Database.ExecuteSqlRawAsync("""
+                        UPDATE entities SET "WorkspaceId" = (
+                            SELECT "Id" FROM workspaces
+                            WHERE workspaces."UserId" = entities."UserId" ORDER BY "CreatedAt" LIMIT 1
+                        ) WHERE "WorkspaceId" IS NULL OR "WorkspaceId" = '' OR "WorkspaceId" = 'default'
+                        """, ct);
+                }
+            }
+            else
+            {
+                await Database.ExecuteSqlRawAsync("""
+                    UPDATE entities
+                    SET canonical_name = COALESCE(canonical_name, name),
+                        normalized_key = COALESCE(normalized_key, normalized_name, lower(name)),
+                        entity_status = COALESCE(NULLIF(entity_status, ''), 'active'),
+                        normalization_version = COALESCE(NULLIF(normalization_version, ''), 'entity_norm_v1')
+                    """, ct);
+                if (await SqliteColumnExistsAsync("entities", "workspace_id", ct)
+                    && await SqliteColumnExistsAsync("workspaces", "id", ct))
+                {
+                    await Database.ExecuteSqlRawAsync("""
+                        UPDATE entities SET workspace_id = (
+                            SELECT id FROM workspaces
+                            WHERE workspaces.user_id = entities.user_id ORDER BY created_at LIMIT 1
+                        ) WHERE workspace_id IS NULL OR workspace_id = '' OR workspace_id = 'default'
+                        """, ct);
+                }
+            }
+        }
+
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_aliases_entity_normalized ON entity_aliases(entity_id, normalized_alias)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_aliases_workspace_normalized ON entity_aliases(workspace_id, normalized_alias)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_mentions_document_batch ON entity_mentions(document_id, extraction_batch_id)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_mentions_workspace_status ON entity_mentions(workspace_id, resolution_status)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_mentions_entity ON entity_mentions(entity_id)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_external_ids_workspace_value ON entity_external_ids(workspace_id, id_type, id_value)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_candidates_mention_entity ON entity_resolution_candidates(mention_id, candidate_entity_id)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_candidates_workspace_decision ON entity_resolution_candidates(workspace_id, decision)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_embeddings_identity ON entity_embeddings(entity_id, embedding_type, provider, model)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_embeddings_workspace_status ON entity_embeddings(workspace_id, status, embedding_type)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_governance_idempotency ON entity_governance_tasks(workspace_id, idempotency_key)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_governance_pair ON entity_governance_tasks(parent_task_id, subject_entity_id, candidate_entity_id)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_governance_queue ON entity_governance_tasks(workspace_id, task_type, status, priority)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_merge_idempotency ON entity_merge_logs(workspace_id, idempotency_key)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_merge_block_pair ON entity_merge_blocklist(workspace_id, entity_id_a, entity_id_b)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_entity_outbox_idempotency ON entity_outbox_events(idempotency_key)", ct);
+        await Database.ExecuteSqlRawAsync(
+            "CREATE INDEX IF NOT EXISTS ix_entity_outbox_queue ON entity_outbox_events(workspace_id, status, created_at)", ct);
+        if (isPostgres || await SqliteColumnExistsAsync("entities", "workspace_id", ct))
+        {
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_entities_workspace_status_type ON entities(workspace_id, entity_status, entity_type)", ct);
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_entities_workspace_redirect ON entities(workspace_id, merged_into_id)", ct);
+        }
+        else
+        {
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_entities_workspace_status_type ON entities(\"WorkspaceId\", entity_status, \"EntityType\")", ct);
+            await Database.ExecuteSqlRawAsync(
+                "CREATE INDEX IF NOT EXISTS ix_entities_workspace_redirect ON entities(\"WorkspaceId\", merged_into_id)", ct);
         }
     }
 
@@ -828,6 +1274,7 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(d => d.Id).HasColumnType("uuid");
         e.Property(d => d.SourceId).HasColumnType("uuid");
         e.Property(d => d.UserId).HasColumnType("uuid");
+        e.Property(d => d.WorkspaceId).HasColumnName("workspace_id").HasColumnType("uuid");
         e.Property(d => d.TopicId).HasColumnType("uuid");
         e.Property(d => d.Title).IsRequired().HasMaxLength(1000);
         e.Property(d => d.ContentMarkdown).HasColumnType("text");
@@ -898,6 +1345,7 @@ public class AppDbContext : DbContext, IAppDbContext
         e.HasIndex(d => d.UserId);
         e.HasIndex(d => d.TopicId);
         e.HasIndex(d => d.SourceId);
+        e.HasIndex(d => new { d.UserId, d.WorkspaceId });
         e.HasIndex(d => d.AiStatus);
         e.HasIndex(d => d.ChunkStatus);
         e.HasIndex(d => d.ParseStatus);
@@ -932,8 +1380,8 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(t => t.Version).HasColumnName("version").IsRequired().HasMaxLength(30);
         e.Property(t => t.CreatedAt).HasColumnName("created_at");
         e.Property(t => t.UpdatedAt).HasColumnName("updated_at");
-        e.HasIndex(t => new { t.UserId, t.SourceTerm, t.TargetTerm }).IsUnique();
-        e.HasIndex(t => new { t.UserId, t.Priority });
+        e.HasIndex(t => new { t.UserId, t.WorkspaceId, t.SourceLanguage, t.SourceTerm, t.TargetLanguage, t.TargetTerm }).IsUnique();
+        e.HasIndex(t => new { t.UserId, t.WorkspaceId, t.ReviewStatus, t.Priority });
     }
 
     private static void ConfigureChunkLocalization(ModelBuilder modelBuilder)
@@ -1121,13 +1569,279 @@ public class AppDbContext : DbContext, IAppDbContext
         e.Property(en => en.UsageCount).IsRequired().HasDefaultValue(0);
         e.Property(en => en.IsVerified).IsRequired().HasDefaultValue(false);
         e.Property(en => en.IsArchived).IsRequired().HasDefaultValue(false);
+        e.Property(en => en.CanonicalName).HasColumnName("canonical_name").HasMaxLength(500);
+        e.Property(en => en.PreferredNameZh).HasColumnName("preferred_name_zh").HasMaxLength(500);
+        e.Property(en => en.PreferredNameEn).HasColumnName("preferred_name_en").HasMaxLength(500);
+        e.Property(en => en.Abbreviation).HasColumnName("abbreviation").HasMaxLength(100);
+        e.Property(en => en.NormalizedKey).HasColumnName("normalized_key").HasMaxLength(500);
+        e.Property(en => en.Status).HasColumnName("entity_status").IsRequired().HasMaxLength(30).HasDefaultValue("active");
+        e.Property(en => en.MergedIntoId).HasColumnName("merged_into_id").HasColumnType("uuid");
+        e.Property(en => en.Confidence).HasColumnName("entity_confidence").HasColumnType("numeric(6,5)");
+        e.Property(en => en.SourceCount).HasColumnName("source_count").HasDefaultValue(0);
+        e.Property(en => en.MentionCount).HasColumnName("mention_count").HasDefaultValue(0);
+        e.Property(en => en.RowVersion).HasColumnName("row_version").HasDefaultValue(0L).IsConcurrencyToken();
+        e.Property(en => en.NormalizationVersion).HasColumnName("normalization_version").IsRequired().HasMaxLength(30)
+            .HasDefaultValue("entity_norm_v1");
 
         e.HasIndex(en => new { en.WorkspaceId, en.NormalizedName, en.EntityType }).IsUnique();
+        e.HasIndex(en => new { en.WorkspaceId, en.NormalizedKey, en.EntityType }).IsUnique();
         e.HasIndex(en => new { en.WorkspaceId, en.EntityType });
-        e.HasIndex(en => new { en.UserId, en.NormalizedName, en.EntityType }).IsUnique();
+        e.HasIndex(en => new { en.WorkspaceId, en.Status, en.EntityType });
+        e.HasIndex(en => new { en.WorkspaceId, en.MergedIntoId });
         e.HasIndex(en => en.UserId);
         e.HasIndex(en => en.EntityType);
         e.HasIndex(en => en.Name);
+    }
+
+    private static void ConfigureEntityAlias(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityAlias>();
+        e.ToTable("entity_aliases");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.EntityId).HasColumnName("entity_id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.Alias).HasColumnName("alias").IsRequired().HasMaxLength(500);
+        e.Property(x => x.NormalizedAlias).HasColumnName("normalized_alias").IsRequired().HasMaxLength(500);
+        e.Property(x => x.LanguageCode).HasColumnName("language_code").HasMaxLength(20);
+        e.Property(x => x.AliasType).HasColumnName("alias_type").IsRequired().HasMaxLength(40);
+        e.Property(x => x.SourceType).HasColumnName("source_type").IsRequired().HasMaxLength(40);
+        e.Property(x => x.SourceId).HasColumnName("source_id").HasMaxLength(200);
+        e.Property(x => x.Confidence).HasColumnName("confidence").HasColumnType("numeric(6,5)");
+        e.Property(x => x.IsVerified).HasColumnName("is_verified").HasDefaultValue(false);
+        e.Property(x => x.ValidFrom).HasColumnName("valid_from");
+        e.Property(x => x.ValidTo).HasColumnName("valid_to");
+        e.Property(x => x.NormalizationVersion).HasColumnName("normalization_version").IsRequired().HasMaxLength(30);
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
+        e.HasIndex(x => new { x.EntityId, x.NormalizedAlias }).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.NormalizedAlias });
+        e.HasIndex(x => new { x.WorkspaceId, x.IsVerified });
+    }
+
+    private static void ConfigureEntityMention(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityMention>();
+        e.ToTable("entity_mentions");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.DocumentId).HasColumnName("document_id").HasColumnType("uuid");
+        e.Property(x => x.ChunkId).HasColumnName("chunk_id").HasColumnType("uuid");
+        e.Property(x => x.EntityId).HasColumnName("entity_id").HasColumnType("uuid");
+        e.Property(x => x.MentionText).HasColumnName("mention_text").IsRequired().HasMaxLength(1000);
+        e.Property(x => x.NormalizedMention).HasColumnName("normalized_mention").IsRequired().HasMaxLength(500);
+        e.Property(x => x.SuggestedType).HasColumnName("suggested_type").IsRequired().HasMaxLength(50);
+        e.Property(x => x.ContextText).HasColumnName("context_text").HasMaxLength(4000);
+        e.Property(x => x.StartOffset).HasColumnName("start_offset");
+        e.Property(x => x.EndOffset).HasColumnName("end_offset");
+        e.Property(x => x.OccurrenceCount).HasColumnName("occurrence_count").HasDefaultValue(1);
+        e.Property(x => x.ExtractionBatchId).HasColumnName("extraction_batch_id").HasColumnType("uuid");
+        e.Property(x => x.ExtractionModel).HasColumnName("extraction_model").HasMaxLength(200);
+        e.Property(x => x.ModelVersion).HasColumnName("model_version").HasMaxLength(100);
+        e.Property(x => x.PromptVersion).HasColumnName("prompt_version").HasMaxLength(100);
+        e.Property(x => x.SchemaVersion).HasColumnName("schema_version").IsRequired().HasMaxLength(50);
+        e.Property(x => x.ExtractionConfidence).HasColumnName("extraction_confidence").HasColumnType("numeric(6,5)");
+        e.Property(x => x.ResolutionStatus).HasColumnName("resolution_status").IsRequired().HasMaxLength(40);
+        e.Property(x => x.ResolutionMethod).HasColumnName("resolution_method").HasMaxLength(50);
+        e.Property(x => x.ResolutionScore).HasColumnName("resolution_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.ResolverVersion).HasColumnName("resolver_version").IsRequired().HasMaxLength(50);
+        e.Property(x => x.ReasonCodes).HasColumnName("reason_codes").HasColumnType("text");
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
+        e.HasIndex(x => new { x.DocumentId, x.ExtractionBatchId });
+        e.HasIndex(x => new { x.WorkspaceId, x.ResolutionStatus });
+        e.HasIndex(x => x.EntityId);
+    }
+
+    private static void ConfigureEntityExternalId(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityExternalId>();
+        e.ToTable("entity_external_ids");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.EntityId).HasColumnName("entity_id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.IdType).HasColumnName("id_type").IsRequired().HasMaxLength(100);
+        e.Property(x => x.IdValue).HasColumnName("id_value").IsRequired().HasMaxLength(500);
+        e.Property(x => x.Source).HasColumnName("source").IsRequired().HasMaxLength(100);
+        e.Property(x => x.IsVerified).HasColumnName("is_verified").HasDefaultValue(false);
+        e.Property(x => x.Confidence).HasColumnName("confidence").HasColumnType("numeric(6,5)");
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
+        e.HasIndex(x => new { x.WorkspaceId, x.IdType, x.IdValue }).IsUnique();
+        e.HasIndex(x => x.EntityId);
+    }
+
+    private static void ConfigureEntityResolutionCandidate(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityResolutionCandidate>();
+        e.ToTable("entity_resolution_candidates");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.MentionId).HasColumnName("mention_id").HasColumnType("uuid");
+        e.Property(x => x.CandidateEntityId).HasColumnName("candidate_entity_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.Rank).HasColumnName("candidate_rank");
+        e.Property(x => x.NameScore).HasColumnName("name_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.AliasScore).HasColumnName("alias_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.DescriptionScore).HasColumnName("description_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.ContextScore).HasColumnName("context_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.RelationScore).HasColumnName("relation_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.SourceScore).HasColumnName("source_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.TotalScore).HasColumnName("total_score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.Decision).HasColumnName("decision").IsRequired().HasMaxLength(40);
+        e.Property(x => x.ReasonCodes).HasColumnName("reason_codes").HasColumnType("text");
+        e.Property(x => x.ResolverVersion).HasColumnName("resolver_version").IsRequired().HasMaxLength(50);
+        e.Property(x => x.LlmDecision).HasColumnName("llm_decision").HasMaxLength(40);
+        e.Property(x => x.LlmConfidence).HasColumnName("llm_confidence").HasColumnType("numeric(6,5)");
+        e.Property(x => x.LlmExplanation).HasColumnName("llm_explanation").HasColumnType("text");
+        e.Property(x => x.LlmModel).HasColumnName("llm_model").HasMaxLength(200);
+        e.Property(x => x.LlmPromptVersion).HasColumnName("llm_prompt_version").HasMaxLength(100);
+        e.Property(x => x.LlmInputTokens).HasColumnName("llm_input_tokens");
+        e.Property(x => x.LlmOutputTokens).HasColumnName("llm_output_tokens");
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.HasIndex(x => new { x.MentionId, x.CandidateEntityId }).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.Decision });
+    }
+
+    private static void ConfigureEntityEmbedding(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityEmbedding>();
+        e.ToTable("entity_embeddings");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.EntityId).HasColumnName("entity_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.Provider).HasColumnName("provider").IsRequired().HasMaxLength(100);
+        e.Property(x => x.Model).HasColumnName("model").IsRequired().HasMaxLength(200);
+        e.Property(x => x.ModelVersion).HasColumnName("model_version").HasMaxLength(100);
+        e.Property(x => x.Dimension).HasColumnName("dimension");
+        e.Property(x => x.EmbeddingType).HasColumnName("embedding_type").IsRequired().HasMaxLength(40);
+        e.Property(x => x.EmbeddingJson).HasColumnName("embedding_json").HasColumnType("text");
+        e.Property(x => x.ContentHash).HasColumnName("content_hash").IsRequired().HasMaxLength(128);
+        e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(50);
+        e.Property(x => x.ErrorMessage).HasColumnName("error_message").HasColumnType("text");
+        e.Property(x => x.RetryCount).HasColumnName("retry_count").HasDefaultValue(0);
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
+        e.HasIndex(x => new { x.EntityId, x.EmbeddingType, x.Provider, x.Model }).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.Status, x.EmbeddingType });
+    }
+
+    private static void ConfigureEntityGovernanceTask(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityGovernanceTask>();
+        e.ToTable("entity_governance_tasks");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.TaskType).HasColumnName("task_type").IsRequired().HasMaxLength(50);
+        e.Property(x => x.ParentTaskId).HasColumnName("parent_task_id").HasColumnType("uuid");
+        e.Property(x => x.SubjectEntityId).HasColumnName("subject_entity_id").HasColumnType("uuid");
+        e.Property(x => x.CandidateEntityId).HasColumnName("candidate_entity_id").HasColumnType("uuid");
+        e.Property(x => x.MentionId).HasColumnName("mention_id").HasColumnType("uuid");
+        e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(30);
+        e.Property(x => x.Priority).HasColumnName("priority");
+        e.Property(x => x.AssigneeId).HasColumnName("assignee_id").HasColumnType("uuid");
+        e.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(200);
+        e.Property(x => x.Cursor).HasColumnName("cursor").HasMaxLength(500);
+        e.Property(x => x.TotalItems).HasColumnName("total_items");
+        e.Property(x => x.ProcessedItems).HasColumnName("processed_items");
+        e.Property(x => x.SucceededItems).HasColumnName("succeeded_items");
+        e.Property(x => x.FailedItems).HasColumnName("failed_items");
+        e.Property(x => x.Score).HasColumnName("score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.ReasonCodes).HasColumnName("reason_codes").HasColumnType("text");
+        e.Property(x => x.Payload).HasColumnName("payload").HasColumnType("text");
+        e.Property(x => x.Result).HasColumnName("result").HasColumnType("text");
+        e.Property(x => x.RetryCount).HasColumnName("retry_count");
+        e.Property(x => x.ErrorMessage).HasColumnName("error_message").HasColumnType("text");
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.UpdatedAt).HasColumnName("updated_at").IsRequired();
+        e.Property(x => x.StartedAt).HasColumnName("started_at");
+        e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+        e.HasIndex(x => new { x.WorkspaceId, x.TaskType, x.Status, x.Priority });
+        e.HasIndex(x => new { x.ParentTaskId, x.Status });
+        e.HasIndex(x => new { x.WorkspaceId, x.IdempotencyKey }).IsUnique();
+        e.HasIndex(x => new
+        {
+            x.ParentTaskId, x.SubjectEntityId, x.CandidateEntityId
+        }).IsUnique();
+    }
+
+    private static void ConfigureEntityMergeLog(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityMergeLog>();
+        e.ToTable("entity_merge_logs");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.BatchId).HasColumnName("batch_id").HasColumnType("uuid");
+        e.Property(x => x.SourceEntityId).HasColumnName("source_entity_id").HasColumnType("uuid");
+        e.Property(x => x.TargetEntityId).HasColumnName("target_entity_id").HasColumnType("uuid");
+        e.Property(x => x.Reason).HasColumnName("reason").IsRequired().HasMaxLength(2000);
+        e.Property(x => x.Method).HasColumnName("method").IsRequired().HasMaxLength(50);
+        e.Property(x => x.Score).HasColumnName("score").HasColumnType("numeric(6,5)");
+        e.Property(x => x.OperatorId).HasColumnName("operator_id").HasColumnType("uuid");
+        e.Property(x => x.DeviceId).HasColumnName("device_id").HasMaxLength(200);
+        e.Property(x => x.RequestId).HasColumnName("request_id").HasMaxLength(200);
+        e.Property(x => x.BeforeSnapshot).HasColumnName("before_snapshot").HasColumnType("text");
+        e.Property(x => x.MigrationSummary).HasColumnName("migration_summary").HasColumnType("text");
+        e.Property(x => x.ExpectedSourceVersion).HasColumnName("expected_source_version");
+        e.Property(x => x.ExpectedTargetVersion).HasColumnName("expected_target_version");
+        e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(30);
+        e.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(200);
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+        e.Property(x => x.RevertedAt).HasColumnName("reverted_at");
+        e.HasIndex(x => new { x.WorkspaceId, x.IdempotencyKey }).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.SourceEntityId, x.TargetEntityId });
+    }
+
+    private static void ConfigureEntityMergeBlocklist(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityMergeBlocklist>();
+        e.ToTable("entity_merge_blocklist");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.EntityIdA).HasColumnName("entity_id_a").HasColumnType("uuid");
+        e.Property(x => x.EntityIdB).HasColumnName("entity_id_b").HasColumnType("uuid");
+        e.Property(x => x.Reason).HasColumnName("reason").IsRequired().HasMaxLength(2000);
+        e.Property(x => x.Source).HasColumnName("source").IsRequired().HasMaxLength(50);
+        e.Property(x => x.OperatorId).HasColumnName("operator_id").HasColumnType("uuid");
+        e.Property(x => x.IsPermanent).HasColumnName("is_permanent");
+        e.Property(x => x.ValidUntil).HasColumnName("valid_until");
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.HasIndex(x => new { x.WorkspaceId, x.EntityIdA, x.EntityIdB }).IsUnique();
+    }
+
+    private static void ConfigureEntityOutboxEvent(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EntityOutboxEvent>();
+        e.ToTable("entity_outbox_events");
+        e.HasKey(x => x.Id);
+        e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+        e.Property(x => x.UserId).HasColumnName("user_id").HasColumnType("uuid");
+        e.Property(x => x.WorkspaceId).HasColumnName("workspace_id").IsRequired().HasMaxLength(200);
+        e.Property(x => x.EntityId).HasColumnName("entity_id").HasColumnType("uuid");
+        e.Property(x => x.EventType).HasColumnName("event_type").IsRequired().HasMaxLength(50);
+        e.Property(x => x.EntityVersion).HasColumnName("entity_version");
+        e.Property(x => x.Payload).HasColumnName("payload").HasColumnType("text");
+        e.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(250);
+        e.Property(x => x.Status).HasColumnName("status").IsRequired().HasMaxLength(30);
+        e.Property(x => x.RetryCount).HasColumnName("retry_count");
+        e.Property(x => x.ErrorMessage).HasColumnName("error_message").HasColumnType("text");
+        e.Property(x => x.CreatedAt).HasColumnName("created_at").IsRequired();
+        e.Property(x => x.ProcessedAt).HasColumnName("processed_at");
+        e.HasIndex(x => x.IdempotencyKey).IsUnique();
+        e.HasIndex(x => new { x.WorkspaceId, x.Status, x.CreatedAt });
     }
 
     private static void ConfigureDocumentEntity(ModelBuilder modelBuilder)

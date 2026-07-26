@@ -21,6 +21,7 @@ public class DocumentPipeline : IDocumentPipeline
     private readonly ILanguageDetectionService _languageDetection;
     private readonly IChineseNormalizationService _chineseNormalization;
     private readonly IL1LocalizationService _l1Localization;
+    private readonly IEntityResolutionOrchestrator _entityResolution;
     private readonly ILogger<DocumentPipeline> _logger;
 
     public DocumentPipeline(
@@ -34,6 +35,7 @@ public class DocumentPipeline : IDocumentPipeline
         ILanguageDetectionService languageDetection,
         IChineseNormalizationService chineseNormalization,
         IL1LocalizationService l1Localization,
+        IEntityResolutionOrchestrator entityResolution,
         ILogger<DocumentPipeline> logger)
     {
         _db = db;
@@ -46,6 +48,7 @@ public class DocumentPipeline : IDocumentPipeline
         _languageDetection = languageDetection;
         _chineseNormalization = chineseNormalization;
         _l1Localization = l1Localization;
+        _entityResolution = entityResolution;
         _logger = logger;
     }
 
@@ -69,8 +72,10 @@ public class DocumentPipeline : IDocumentPipeline
             return;
         }
 
-        // Source entity has no WorkspaceId field; use "default" per §8.3.1
-        var workspaceId = "default";
+        var resolvedWorkspaceId = existingDoc?.WorkspaceId ?? await _db.Workspaces.AsNoTracking()
+            .Where(w => w.UserId == userId).OrderBy(w => w.CreatedAt)
+            .Select(w => (Guid?)w.Id).FirstOrDefaultAsync(ct);
+        var workspaceId = resolvedWorkspaceId?.ToString() ?? "default";
         var now = DateTime.UtcNow;
         Guid? documentId = existingDoc?.Id;
         var sourceType = string.IsNullOrWhiteSpace(source.SourceType) ? "text" : source.SourceType;
@@ -208,6 +213,7 @@ public class DocumentPipeline : IDocumentPipeline
                     Id = Guid.NewGuid(),
                     SourceId = sourceId,
                     UserId = userId,
+                    WorkspaceId = resolvedWorkspaceId,
                     TopicId = source.TopicId,
                     Title = parseResult.Title ?? source.Title ?? "Untitled",
                     CreatedAt = now,
@@ -218,6 +224,7 @@ public class DocumentPipeline : IDocumentPipeline
                 {
                     _db.Documents.Add(document);
                 }
+                document.WorkspaceId ??= resolvedWorkspaceId;
                 documentId = document.Id;
 
                 // Core content fields
@@ -411,13 +418,17 @@ public class DocumentPipeline : IDocumentPipeline
             document.TagStatus = "done";
 
             // ================================================================
-            // Step 7: Create Entities (dedup: user_id + normalized_name + entity_type)
+            // Step 7: Resolve entity mentions to stable canonical entities.
             // ================================================================
-            if (aiResult.Entities != null && aiResult.Entities.Count > 0)
-            {
-                await CreateEntitiesAsync(document.Id, userId, aiResult.Entities, ct);
-            }
-            document.EntityStatus = "done";
+            await _entityResolution.ResolveDocumentAsync(
+                document.Id,
+                aiResult.Entities ?? [],
+                new EntityExtractionContext
+                {
+                    Model = aiResult.AiModel,
+                    PromptVersion = aiResult.PromptVersion
+                },
+                ct);
 
             // ================================================================
             // Step 8: Finalize statuses
@@ -699,61 +710,6 @@ public class DocumentPipeline : IDocumentPipeline
                     Source = "ai",
                     Confidence = tagDto.Confidence ?? 0.85m,
                     Reason = tagDto.Reason,
-                    CreatedAt = now
-                });
-            }
-        }
-
-        await _db.SaveChangesAsync(ct);
-    }
-
-    private async Task CreateEntitiesAsync(Guid documentId, Guid userId, List<EntityResult> entities, CancellationToken ct)
-    {
-        var now = DateTime.UtcNow;
-
-        foreach (var entityDto in entities)
-        {
-            if (string.IsNullOrWhiteSpace(entityDto.Name)) continue;
-
-            var name = entityDto.Name.Trim();
-            var entityType = string.IsNullOrWhiteSpace(entityDto.EntityType) ? "concept" : entityDto.EntityType.Trim();
-            var normalizedName = name.ToLowerInvariant();
-
-            // Check if entity already exists (dedup: user_id + normalized_name + entity_type)
-            var entity = await _db.Entities.FirstOrDefaultAsync(
-                e => e.UserId == userId && e.NormalizedName == normalizedName && e.EntityType == entityType, ct);
-
-            if (entity == null)
-            {
-                entity = new Entity
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = userId,
-                    Name = name,
-                    NormalizedName = normalizedName,
-                    EntityType = entityType,
-                    Description = entityDto.Description,
-                    CreatedAt = now,
-                    UpdatedAt = now
-                };
-                _db.Entities.Add(entity);
-                await _db.SaveChangesAsync(ct);
-            }
-
-            // Check if document-entity association already exists
-            var existingAssoc = await _db.DocumentEntities.FirstOrDefaultAsync(
-                de => de.DocumentId == documentId && de.EntityId == entity.Id, ct);
-
-            if (existingAssoc == null)
-            {
-                _db.DocumentEntities.Add(new DocumentEntity
-                {
-                    DocumentId = documentId,
-                    EntityId = entity.Id,
-                    MentionCount = entityDto.MentionCount > 0 ? entityDto.MentionCount : 1,
-                    Confidence = entityDto.Confidence ?? 0.8m,
-                    Importance = entityDto.Importance ?? 0.5m,
-                    Evidence = entityDto.Description,
                     CreatedAt = now
                 });
             }

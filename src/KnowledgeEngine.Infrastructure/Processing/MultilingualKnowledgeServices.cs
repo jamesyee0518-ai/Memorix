@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
+using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Domain.Entities;
 using KnowledgeEngine.Infrastructure.Db;
@@ -76,9 +77,10 @@ public sealed class LocalizationQualityService : ILocalizationQualityService
         if (EnglishNegation.IsMatch(sourceText) && !ChineseNegation.IsMatch(localizedText))
         { issues.Add("原文包含否定语义，中文元数据未检测到否定词"); score -= 15; }
 
-        foreach (var term in terminology ?? Array.Empty<Terminology>())
+        foreach (var term in (terminology ?? Array.Empty<Terminology>())
+                     .Where(t => string.Equals(t.ReviewStatus, "approved", StringComparison.OrdinalIgnoreCase)))
         {
-            if (sourceText.Contains(term.SourceTerm, StringComparison.OrdinalIgnoreCase)
+            if (TerminologyService.Variants(term).Any(v => sourceText.Contains(v, StringComparison.OrdinalIgnoreCase))
                 && !localizedText.Contains(term.TargetTerm, StringComparison.OrdinalIgnoreCase))
             { issues.Add($"术语未按词库映射：{term.SourceTerm} → {term.TargetTerm}"); score -= 10; }
         }
@@ -94,34 +96,111 @@ public sealed class LocalizationQualityService : ILocalizationQualityService
 
 public sealed class TerminologyService : ITerminologyService
 {
+    private static readonly HashSet<string> ReviewStatuses = new(StringComparer.OrdinalIgnoreCase)
+        { "draft", "pending", "approved", "rejected" };
+    private static readonly Regex CandidatePattern = new(
+        @"\b(?:[A-Z]{2,}(?:[-/.][A-Z0-9]+)*|[A-Z][A-Za-z0-9+#.-]{2,}(?:\s+[A-Z][A-Za-z0-9+#.-]{2,}){0,3})\b",
+        RegexOptions.Compiled);
     private readonly IAppDbContext _db;
 
     public TerminologyService(IAppDbContext db) => _db = db;
 
-    public async Task<IReadOnlyList<Terminology>> ListAsync(Guid userId, string? query = null, CancellationToken ct = default)
+    public async Task<PagedResult<Terminology>> ListAsync(
+        Guid userId, Guid workspaceId, TerminologyQuery request, CancellationToken ct = default)
     {
-        var terms = await _db.Terminology.AsNoTracking()
-            .Where(t => t.UserId == userId)
-            .OrderByDescending(t => t.Priority).ThenBy(t => t.SourceTerm)
-            .ToListAsync(ct);
-        if (string.IsNullOrWhiteSpace(query)) return terms;
-        return terms.Where(t => t.SourceTerm.Contains(query, StringComparison.OrdinalIgnoreCase)
-                             || t.TargetTerm.Contains(query, StringComparison.OrdinalIgnoreCase)
-                             || (t.Aliases?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        var query = _db.Terminology.AsNoTracking()
+            .Where(t => t.UserId == userId && t.WorkspaceId == workspaceId);
+        if (!string.IsNullOrWhiteSpace(request.SourceLanguage))
+            query = query.Where(t => t.SourceLanguage == request.SourceLanguage);
+        if (!string.IsNullOrWhiteSpace(request.TargetLanguage))
+            query = query.Where(t => t.TargetLanguage == request.TargetLanguage);
+        if (!string.IsNullOrWhiteSpace(request.Domain))
+            query = query.Where(t => t.Domain == request.Domain);
+        if (!string.IsNullOrWhiteSpace(request.ReviewStatus))
+            query = query.Where(t => t.ReviewStatus == request.ReviewStatus);
+        if (!string.IsNullOrWhiteSpace(request.Query))
+        {
+            var pattern = $"%{request.Query.Trim()}%";
+            query = query.Where(t => EF.Functions.Like(t.SourceTerm, pattern)
+                                  || EF.Functions.Like(t.TargetTerm, pattern)
+                                  || (t.Aliases != null && EF.Functions.Like(t.Aliases, pattern)));
+        }
+
+        var page = Math.Max(1, request.Page);
+        var pageSize = Math.Clamp(request.PageSize, 1, 200);
+        var total = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(t => t.Priority).ThenBy(t => t.SourceTerm)
+            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+        return new PagedResult<Terminology> { Items = items, Total = total, Page = page, PageSize = pageSize };
     }
 
-    public async Task<Terminology> UpsertAsync(Guid userId, Terminology term, CancellationToken ct = default)
+    public async Task<IReadOnlyList<Terminology>> SelectForContentAsync(
+        Guid userId, Guid? workspaceId, string? sourceLanguage, string? targetLanguage,
+        string? domain, string? content, int maxPromptCharacters = 12000, CancellationToken ct = default)
+    {
+        var query = _db.Terminology.AsNoTracking()
+            .Where(t => t.UserId == userId && t.ReviewStatus == "approved");
+        if (workspaceId.HasValue)
+            query = query.Where(t => t.WorkspaceId == workspaceId);
+        if (!string.IsNullOrWhiteSpace(sourceLanguage) && sourceLanguage != "und")
+            query = query.Where(t => t.SourceLanguage == sourceLanguage || t.SourceLanguage == "und");
+        if (!string.IsNullOrWhiteSpace(targetLanguage))
+            query = query.Where(t => t.TargetLanguage == targetLanguage);
+        if (!string.IsNullOrWhiteSpace(domain))
+            query = query.Where(t => t.Domain == null || t.Domain == "" || t.Domain == domain);
+
+        var terms = await query.OrderByDescending(t => t.Priority).ThenByDescending(t => t.UpdatedAt).ToListAsync(ct);
+        if (!string.IsNullOrWhiteSpace(content))
+        {
+            terms = terms.OrderByDescending(t => MatchesAny(content, Variants(t)))
+                .ThenByDescending(t => t.Priority).ThenByDescending(t => t.UpdatedAt).ToList();
+        }
+
+        var selected = new List<Terminology>();
+        var used = 0;
+        foreach (var term in terms)
+        {
+            var lineLength = term.SourceTerm.Length + term.TargetTerm.Length
+                + ParseAliases(term.Aliases).Sum(x => x.Length) + 16;
+            if (selected.Count > 0 && used + lineLength > Math.Clamp(maxPromptCharacters, 1000, 50000)) break;
+            selected.Add(term);
+            used += lineLength;
+        }
+        return selected;
+    }
+
+    public async Task<Terminology> UpsertAsync(
+        Guid userId, Guid workspaceId, Terminology term, bool queueReprocess = true, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(term.SourceTerm) || string.IsNullOrWhiteSpace(term.TargetTerm))
             throw new ArgumentException("SourceTerm and TargetTerm are required");
 
-        var current = term.Id == Guid.Empty ? null : await _db.Terminology.FirstOrDefaultAsync(t => t.Id == term.Id && t.UserId == userId, ct);
-        current ??= await _db.Terminology.FirstOrDefaultAsync(t => t.UserId == userId && t.SourceTerm == term.SourceTerm && t.TargetTerm == term.TargetTerm, ct);
+        Normalize(term);
+        if (!ReviewStatuses.Contains(term.ReviewStatus))
+            throw new ArgumentException("ReviewStatus must be draft, pending, approved, or rejected");
+
+        var current = term.Id == Guid.Empty ? null : await _db.Terminology
+            .FirstOrDefaultAsync(t => t.Id == term.Id && t.UserId == userId && t.WorkspaceId == workspaceId, ct);
+        current ??= await _db.Terminology.FirstOrDefaultAsync(t => t.UserId == userId && t.WorkspaceId == workspaceId
+            && t.SourceLanguage == term.SourceLanguage && t.SourceTerm.ToLower() == term.SourceTerm.ToLower()
+            && t.TargetLanguage == term.TargetLanguage && t.TargetTerm.ToLower() == term.TargetTerm.ToLower(), ct);
+
+        var conflict = await _db.Terminology.AsNoTracking().FirstOrDefaultAsync(t =>
+            t.UserId == userId && t.WorkspaceId == workspaceId && t.Id != (current == null ? Guid.Empty : current.Id)
+            && t.SourceLanguage == term.SourceLanguage && t.TargetLanguage == term.TargetLanguage
+            && t.SourceTerm.ToLower() == term.SourceTerm.ToLower()
+            && t.TargetTerm.ToLower() != term.TargetTerm.ToLower(), ct);
+        if (conflict != null)
+            throw new InvalidOperationException(
+                $"术语冲突：{term.SourceTerm} 已映射为“{conflict.TargetTerm}”，请先处理冲突");
+
+        var changedVariants = current == null ? Variants(term).ToList() : Variants(current).Concat(Variants(term)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (current == null)
         {
             current = term;
             current.Id = current.Id == Guid.Empty ? Guid.NewGuid() : current.Id;
             current.UserId = userId;
+            current.WorkspaceId = workspaceId;
             current.CreatedAt = DateTime.UtcNow;
             _db.Terminology.Add(current);
         }
@@ -139,29 +218,287 @@ public sealed class TerminologyService : ITerminologyService
         }
         current.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        if (queueReprocess)
+            await QueueAffectedDocumentsAsync(userId, workspaceId, changedVariants, ct);
         return current;
     }
 
-    public async Task<bool> DeleteAsync(Guid userId, Guid id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(Guid userId, Guid workspaceId, Guid id, CancellationToken ct = default)
     {
-        var term = await _db.Terminology.FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId, ct);
+        var term = await _db.Terminology.FirstOrDefaultAsync(
+            t => t.Id == id && t.UserId == userId && t.WorkspaceId == workspaceId, ct);
         if (term == null) return false;
+        var variants = Variants(term).ToList();
         _db.Terminology.Remove(term);
         await _db.SaveChangesAsync(ct);
+        await QueueAffectedDocumentsAsync(userId, workspaceId, variants, ct);
         return true;
     }
 
-    public async Task<IReadOnlyList<string>> ExpandQueryAsync(Guid userId, string query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> ExpandQueryAsync(
+        Guid userId, Guid? workspaceId, string query, string? sourceLanguage = null,
+        string? targetLanguage = null, string? domain = null, CancellationToken ct = default)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { query.Trim() };
-        foreach (var term in await ListAsync(userId, null, ct))
+        var terms = await SelectForContentAsync(
+            userId, workspaceId, sourceLanguage, targetLanguage, domain, query, 50000, ct);
+        foreach (var term in terms)
         {
-            var variants = new[] { term.SourceTerm, term.TargetTerm }.Concat(ParseAliases(term.Aliases));
-            if (variants.Any(v => query.Contains(v, StringComparison.OrdinalIgnoreCase)))
+            var variants = Variants(term).ToList();
+            if (variants.Any(v => ContainsTerm(query, v)))
                 foreach (var variant in variants.Where(v => !string.IsNullOrWhiteSpace(v))) result.Add(variant.Trim());
         }
         return result.ToList();
     }
+
+    public async Task<TerminologyBulkResult> BulkUpsertAsync(
+        Guid userId, Guid workspaceId, TerminologyBulkRequest request, CancellationToken ct = default)
+    {
+        if (request.Items.Count > 5000) throw new ArgumentException("A bulk request can contain at most 5000 terms");
+        var result = new TerminologyBulkResult();
+        var variants = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var term in request.Items)
+        {
+            try
+            {
+                Normalize(term);
+                var exists = term.Id != Guid.Empty && await _db.Terminology.AsNoTracking()
+                    .AnyAsync(t => t.Id == term.Id && t.UserId == userId && t.WorkspaceId == workspaceId, ct);
+                await UpsertAsync(userId, workspaceId, term, false, ct);
+                if (exists) result.Updated++; else result.Created++;
+                foreach (var variant in Variants(term)) variants.Add(variant);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                result.Skipped++;
+                if (result.Errors.Count < 100) result.Errors.Add($"{term.SourceTerm}: {ex.Message}");
+                if (!request.SkipConflicts) throw;
+            }
+        }
+        result.ReprocessJobsQueued = await QueueAffectedDocumentsAsync(userId, workspaceId, variants, ct);
+        return result;
+    }
+
+    public async Task<Terminology> ReviewAsync(
+        Guid userId, Guid workspaceId, Guid id, string status, CancellationToken ct = default)
+    {
+        if (!ReviewStatuses.Contains(status)) throw new ArgumentException("Unsupported review status");
+        var term = await _db.Terminology.FirstOrDefaultAsync(
+            t => t.Id == id && t.UserId == userId && t.WorkspaceId == workspaceId, ct)
+            ?? throw new KeyNotFoundException("Terminology was not found");
+        var changed = !string.Equals(term.ReviewStatus, status, StringComparison.OrdinalIgnoreCase);
+        term.ReviewStatus = status.ToLowerInvariant();
+        term.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        if (changed) await QueueAffectedDocumentsAsync(userId, workspaceId, Variants(term), ct);
+        return term;
+    }
+
+    public async Task<IReadOnlyList<TerminologyConflict>> ListConflictsAsync(
+        Guid userId, Guid workspaceId, CancellationToken ct = default)
+    {
+        var terms = await _db.Terminology.AsNoTracking()
+            .Where(t => t.UserId == userId && t.WorkspaceId == workspaceId).ToListAsync(ct);
+        return terms.GroupBy(t => new
+            {
+                SourceLanguage = t.SourceLanguage.ToLowerInvariant(),
+                SourceTerm = t.SourceTerm.Trim().ToLowerInvariant(),
+                TargetLanguage = t.TargetLanguage.ToLowerInvariant()
+            })
+            .Where(g => g.Select(x => x.TargetTerm.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1)
+            .Select(g => new TerminologyConflict
+            {
+                SourceLanguage = g.First().SourceLanguage,
+                SourceTerm = g.First().SourceTerm,
+                TargetLanguage = g.First().TargetLanguage,
+                Terms = g.OrderByDescending(x => x.Priority).ToList()
+            }).ToList();
+    }
+
+    public async Task<TerminologyStats> GetStatsAsync(Guid userId, Guid workspaceId, CancellationToken ct = default)
+    {
+        var terms = await _db.Terminology.AsNoTracking()
+            .Where(t => t.UserId == userId && t.WorkspaceId == workspaceId).ToListAsync(ct);
+        var conflicts = await ListConflictsAsync(userId, workspaceId, ct);
+        var documentIds = await _db.Documents.AsNoTracking()
+            .Where(d => d.UserId == userId && d.WorkspaceId == workspaceId).Select(d => d.Id).ToListAsync(ct);
+        var pendingJobs = await _db.MultilingualBatchJobs.AsNoTracking().CountAsync(j =>
+            j.UserId == userId && documentIds.Contains(j.DocumentId)
+            && j.JobType == "glossary_reprocess"
+            && (j.Status == "pending" || j.Status == "running" || j.Status == "paused"), ct);
+        return new TerminologyStats
+        {
+            Total = terms.Count,
+            Approved = terms.Count(t => t.ReviewStatus == "approved"),
+            PendingReview = terms.Count(t => t.ReviewStatus is "pending" or "draft"),
+            Rejected = terms.Count(t => t.ReviewStatus == "rejected"),
+            Conflicts = conflicts.Count,
+            PendingReprocessJobs = pendingJobs,
+            Domains = terms.GroupBy(t => string.IsNullOrWhiteSpace(t.Domain) ? "通用" : t.Domain!)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase),
+            LanguagePairs = terms.GroupBy(t => $"{t.SourceLanguage}→{t.TargetLanguage}")
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase)
+        };
+    }
+
+    public async Task<IReadOnlyList<TerminologyUsage>> GetUsageAsync(
+        Guid userId, Guid workspaceId, IReadOnlyCollection<Guid> terminologyIds, CancellationToken ct = default)
+    {
+        var ids = terminologyIds.Distinct().Take(200).ToList();
+        var terms = await _db.Terminology.AsNoTracking()
+            .Where(t => t.UserId == userId && t.WorkspaceId == workspaceId && ids.Contains(t.Id)).ToListAsync(ct);
+        var documents = await _db.Documents.AsNoTracking()
+            .Where(d => d.UserId == userId && d.WorkspaceId == workspaceId)
+            .Select(d => new { d.Id, d.Title, d.TitleOriginal, d.TitleZh, d.Summary, d.SummaryZh, d.ContentText })
+            .Take(5000).ToListAsync(ct);
+        var docIds = documents.Select(d => d.Id).ToList();
+        var chunks = await _db.DocumentChunks.AsNoTracking().Where(c => docIds.Contains(c.DocumentId))
+            .Select(c => new { c.DocumentId, c.Content, c.ContentOriginal, c.ContentNormalized })
+            .Take(20000).ToListAsync(ct);
+        return terms.Select(term =>
+        {
+            var variants = Variants(term).ToList();
+            return new TerminologyUsage
+            {
+                TerminologyId = term.Id,
+                DocumentCount = documents.Count(d => MatchesAny(
+                    $"{d.Title}\n{d.TitleOriginal}\n{d.TitleZh}\n{d.Summary}\n{d.SummaryZh}\n{d.ContentText}", variants)),
+                ChunkCount = chunks.Count(c => MatchesAny(
+                    $"{c.ContentOriginal}\n{c.ContentNormalized}\n{c.Content}", variants))
+            };
+        }).ToList();
+    }
+
+    public async Task<IReadOnlyList<TerminologyCandidate>> ExtractCandidatesAsync(
+        Guid userId, Guid workspaceId, TerminologyExtractionRequest request, CancellationToken ct = default)
+    {
+        var limit = Math.Clamp(request.DocumentLimit, 1, 500);
+        var query = _db.Documents.AsNoTracking()
+            .Where(d => d.UserId == userId && d.WorkspaceId == workspaceId);
+        if (request.TopicId.HasValue) query = query.Where(d => d.TopicId == request.TopicId);
+        var docs = await query.OrderByDescending(d => d.UpdatedAt).Take(limit)
+            .Select(d => new { d.Id, d.Title, d.ContentText, d.Summary, d.SourceDomain }).ToListAsync(ct);
+        var existing = (await _db.Terminology.AsNoTracking()
+                .Where(t => t.UserId == userId && t.WorkspaceId == workspaceId)
+                .Select(t => t.SourceTerm).ToListAsync(ct))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = new Dictionary<string, TerminologyCandidate>(StringComparer.OrdinalIgnoreCase);
+        foreach (var doc in docs)
+        {
+            var text = $"{doc.Title}\n{doc.Summary}\n{doc.ContentText}";
+            foreach (Match match in CandidatePattern.Matches(text))
+            {
+                var value = Regex.Replace(match.Value.Trim(), @"\s+", " ");
+                if (value.Length < 3 || value.Length > 100 || existing.Contains(value)) continue;
+                if (!candidates.TryGetValue(value, out var candidate))
+                {
+                    candidate = new TerminologyCandidate
+                    {
+                        SourceTerm = value, Domain = doc.SourceDomain, Occurrences = 0
+                    };
+                    candidates[value] = candidate;
+                }
+                candidate.Occurrences++;
+                if (candidate.DocumentIds.Count < 10 && !candidate.DocumentIds.Contains(doc.Id))
+                    candidate.DocumentIds.Add(doc.Id);
+            }
+        }
+        return candidates.Values.OrderByDescending(x => x.Occurrences).ThenBy(x => x.SourceTerm)
+            .Take(Math.Clamp(request.CandidateLimit, 1, 200)).ToList();
+    }
+
+    private async Task<int> QueueAffectedDocumentsAsync(
+        Guid userId, Guid workspaceId, IEnumerable<string> variants, CancellationToken ct)
+    {
+        var terms = variants.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(100).ToList();
+        if (terms.Count == 0) return 0;
+        var documents = await _db.Documents.AsNoTracking()
+            .Where(d => d.UserId == userId && d.WorkspaceId == workspaceId)
+            .Select(d => new { d.Id, d.Title, d.TitleOriginal, d.ContentText, d.Summary })
+            .Take(5000).ToListAsync(ct);
+        var candidateIds = documents.Where(d => MatchesAny(
+                $"{d.Title}\n{d.TitleOriginal}\n{d.Summary}\n{d.ContentText}", terms))
+            .Select(d => d.Id).ToHashSet();
+        if (candidateIds.Count < 500)
+        {
+            var chunkMatches = await _db.DocumentChunks.AsNoTracking()
+                .Where(c => c.UserId == userId && documents.Select(d => d.Id).Contains(c.DocumentId))
+                .Select(c => new { c.DocumentId, c.ContentOriginal, c.Content }).Take(20000).ToListAsync(ct);
+            foreach (var chunk in chunkMatches.Where(c => MatchesAny($"{c.ContentOriginal}\n{c.Content}", terms)))
+                candidateIds.Add(chunk.DocumentId);
+        }
+
+        var activeIds = await _db.MultilingualBatchJobs.AsNoTracking()
+            .Where(j => j.UserId == userId && candidateIds.Contains(j.DocumentId)
+                && j.JobType == "glossary_reprocess"
+                && (j.Status == "pending" || j.Status == "running" || j.Status == "paused"))
+            .Select(j => j.DocumentId).ToListAsync(ct);
+        candidateIds.ExceptWith(activeIds);
+        var chunkCounts = await _db.DocumentChunks.AsNoTracking().Where(c => candidateIds.Contains(c.DocumentId))
+            .GroupBy(c => c.DocumentId).Select(g => new { DocumentId = g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.DocumentId, x => x.Count, ct);
+        var now = DateTime.UtcNow;
+        foreach (var documentId in candidateIds.Take(500))
+        {
+            var count = chunkCounts.GetValueOrDefault(documentId);
+            _db.MultilingualBatchJobs.Add(new MultilingualBatchJob
+            {
+                Id = Guid.NewGuid(), UserId = userId, DocumentId = documentId,
+                JobType = "glossary_reprocess", Status = "pending", Force = true,
+                MaxChunks = Math.Max(1, Math.Min(count, 2000)), TotalItems = Math.Max(1, Math.Min(count, 2000)),
+                CreatedAt = now, UpdatedAt = now
+            });
+        }
+        if (candidateIds.Count > 0) await _db.SaveChangesAsync(ct);
+        return Math.Min(candidateIds.Count, 500);
+    }
+
+    private static void Normalize(Terminology term)
+    {
+        term.SourceLanguage = string.IsNullOrWhiteSpace(term.SourceLanguage) ? "en" : term.SourceLanguage.Trim().ToLowerInvariant();
+        term.TargetLanguage = string.IsNullOrWhiteSpace(term.TargetLanguage) ? "zh-CN" : term.TargetLanguage.Trim();
+        term.SourceTerm = term.SourceTerm.Trim().Normalize(NormalizationForm.FormKC);
+        term.TargetTerm = term.TargetTerm.Trim().Normalize(NormalizationForm.FormKC);
+        term.Domain = string.IsNullOrWhiteSpace(term.Domain) ? null : term.Domain.Trim();
+        term.Aliases = string.IsNullOrWhiteSpace(term.Aliases)
+            ? null
+            : JsonSerializer.Serialize(ParseAliases(term.Aliases).Select(x => x.Trim())
+                .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase));
+        term.ReviewStatus = string.IsNullOrWhiteSpace(term.ReviewStatus) ? "pending" : term.ReviewStatus.Trim().ToLowerInvariant();
+        term.Version = string.IsNullOrWhiteSpace(term.Version) ? "v1" : term.Version.Trim();
+    }
+
+    internal static IEnumerable<string> Variants(Terminology term) =>
+        new[] { term.SourceTerm, term.TargetTerm }.Concat(ParseAliases(term.Aliases))
+            .Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    internal static string FormatPromptLine(Terminology term)
+    {
+        var aliases = ParseAliases(term.Aliases).ToList();
+        return aliases.Count == 0
+            ? $"- {term.SourceTerm} => {term.TargetTerm}"
+            : $"- {term.SourceTerm}（别名：{string.Join("、", aliases)}）=> {term.TargetTerm}";
+    }
+
+    private static bool MatchesAny(string? content, IEnumerable<string> terms) =>
+        !string.IsNullOrWhiteSpace(content) && terms.Any(term => ContainsTerm(content, term));
+
+    private static bool ContainsTerm(string content, string term)
+    {
+        if (string.IsNullOrWhiteSpace(term)) return false;
+        var index = content.IndexOf(term, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            var leftOk = index == 0 || !char.IsLetterOrDigit(content[index - 1]) || IsCjk(term[0]);
+            var end = index + term.Length;
+            var rightOk = end >= content.Length || !char.IsLetterOrDigit(content[end]) || IsCjk(term[^1]);
+            if (leftOk && rightOk) return true;
+            index = content.IndexOf(term, index + 1, StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
+    }
+
+    private static bool IsCjk(char c) => c is >= '\u3400' and <= '\u9fff';
 
     internal static IEnumerable<string> ParseAliases(string? aliases)
     {
@@ -173,7 +510,7 @@ public sealed class TerminologyService : ITerminologyService
 
 public sealed class L1LocalizationService : IL1LocalizationService
 {
-    private const string PromptVersion = "l1-zh-v1";
+    private const string PromptVersion = "l1-zh-v2";
     private readonly IAppDbContext _db;
     private readonly ILlmService _llm;
     private readonly ITerminologyService _terminology;
@@ -202,7 +539,11 @@ public sealed class L1LocalizationService : IL1LocalizationService
         try
         {
             L1LocalizationResult result;
-            var glossary = await _terminology.ListAsync(doc.UserId, null, ct);
+            var sourceContent = string.Join('\n', new[] { doc.TitleOriginal ?? doc.Title, doc.Summary, doc.ContentText }
+                .Where(x => !string.IsNullOrWhiteSpace(x)));
+            var glossary = await _terminology.SelectForContentAsync(
+                doc.UserId, doc.WorkspaceId, doc.PrimaryLanguage ?? doc.Language, "zh-CN",
+                doc.SourceDomain, sourceContent, ct: ct);
             if ((doc.PrimaryLanguage ?? doc.Language)?.StartsWith("zh", StringComparison.OrdinalIgnoreCase) == true)
             {
                 result = new L1LocalizationResult(
@@ -211,7 +552,7 @@ public sealed class L1LocalizationService : IL1LocalizationService
             }
             else
             {
-                var glossaryText = string.Join('\n', glossary.Take(200).Select(t => $"- {t.SourceTerm} => {t.TargetTerm}"));
+                var glossaryText = string.Join('\n', glossary.Select(TerminologyService.FormatPromptLine));
                 var system = "你是严谨的中文知识库本地化助手。只输出 JSON，不虚构信息；保留专有名词、数字、版本号、URL 与代码。";
                 var content = (doc.ContentText ?? string.Empty);
                 if (content.Length > 8000) content = content[..8000];
@@ -304,7 +645,7 @@ public sealed class L1LocalizationService : IL1LocalizationService
 
 public sealed class ChunkLocalizationService : IChunkLocalizationService
 {
-    private const string PromptVersion = "chunk-zh-v1";
+    private const string PromptVersion = "chunk-zh-v2";
     private readonly IAppDbContext _db;
     private readonly ILlmService _llm;
     private readonly ITerminologyService _terminology;
@@ -330,7 +671,9 @@ public sealed class ChunkLocalizationService : IChunkLocalizationService
         var language = string.IsNullOrWhiteSpace(request.LanguageCode) ? "zh-CN" : request.LanguageCode.Trim();
         var source = string.IsNullOrWhiteSpace(chunk.ContentOriginal) ? chunk.Content : chunk.ContentOriginal;
         var sourceHash = chunk.ContentHash ?? Hash(source);
-        var glossary = await _terminology.ListAsync(userId, null, ct);
+        var glossary = await _terminology.SelectForContentAsync(
+            userId, document.WorkspaceId, chunk.DetectedLanguage ?? document.PrimaryLanguage ?? document.Language,
+            language, document.SourceDomain, $"{chunk.ChunkTitle}\n{source}", ct: ct);
         var glossaryVersion = GlossaryVersion(glossary);
         var idempotency = Hash($"{chunk.Id}|{sourceHash}|{language}|{PromptVersion}|{glossaryVersion}");
 
@@ -343,7 +686,7 @@ public sealed class ChunkLocalizationService : IChunkLocalizationService
         {
             localization = new ChunkLocalization
             {
-                Id = Guid.NewGuid(), ChunkId = chunk.Id, UserId = userId, LanguageCode = language,
+                Id = Guid.NewGuid(), ChunkId = chunk.Id, UserId = userId, WorkspaceId = document.WorkspaceId, LanguageCode = language,
                 ContentLocalized = string.Empty, TranslationType = request.TranslationType,
                 PromptVersion = PromptVersion, SourceContentHash = sourceHash, IdempotencyKey = idempotency,
                 Status = "processing", ReviewStatus = "unreviewed", CreatedAt = now, UpdatedAt = now
@@ -382,7 +725,7 @@ public sealed class ChunkLocalizationService : IChunkLocalizationService
             }
             else
             {
-                var glossaryText = string.Join('\n', glossary.Take(200).Select(t => $"- {t.SourceTerm} => {t.TargetTerm}"));
+                var glossaryText = string.Join('\n', glossary.Select(TerminologyService.FormatPromptLine));
                 var system = "你是知识库分块翻译器。忠实翻译为简体中文，只输出 JSON；保留数字、单位、日期、URL、代码和专有名词，不添加原文没有的事实。";
                 var user = $$"""
                     输出格式：{"heading_zh":"","content_zh":""}
@@ -658,11 +1001,12 @@ public sealed class ChineseFullTextIndexService : IChineseFullTextIndexService
     private readonly AppDbContext _db;
     private readonly IChineseTokenizer _tokenizer;
     private readonly ITerminologyService _terminology;
+    private readonly IWorkspaceService _workspaces;
     private readonly ILogger<ChineseFullTextIndexService> _logger;
 
     public ChineseFullTextIndexService(AppDbContext db, IChineseTokenizer tokenizer, ITerminologyService terminology,
-        ILogger<ChineseFullTextIndexService> logger)
-    { _db = db; _tokenizer = tokenizer; _terminology = terminology; _logger = logger; }
+        IWorkspaceService workspaces, ILogger<ChineseFullTextIndexService> logger)
+    { _db = db; _tokenizer = tokenizer; _terminology = terminology; _workspaces = workspaces; _logger = logger; }
 
     public async Task EnsureCreatedAsync(CancellationToken ct = default)
     {
@@ -691,8 +1035,10 @@ public sealed class ChineseFullTextIndexService : IChineseFullTextIndexService
             .ToDictionaryAsync(x => x.ChunkId, ct);
         var entities = await (from de in _db.DocumentEntities.AsNoTracking() join e in _db.Entities.AsNoTracking() on de.EntityId equals e.Id
                               where de.DocumentId == documentId select e.Name).ToListAsync(ct);
-        var terms = await _terminology.ListAsync(doc.UserId, null, ct);
-        var protectedTerms = terms.SelectMany(t => new[] { t.SourceTerm, t.TargetTerm }.Concat(TerminologyService.ParseAliases(t.Aliases))).ToList();
+        var terms = await _terminology.SelectForContentAsync(
+            doc.UserId, doc.WorkspaceId, doc.PrimaryLanguage ?? doc.Language, "zh-CN",
+            doc.SourceDomain, $"{doc.Title}\n{doc.Summary}\n{doc.ContentText}", 50000, ct);
+        var protectedTerms = terms.SelectMany(TerminologyService.Variants).ToList();
 
         var connection = _db.Database.GetDbConnection();
         var close = connection.State != ConnectionState.Open;
@@ -736,10 +1082,14 @@ public sealed class ChineseFullTextIndexService : IChineseFullTextIndexService
 
     public async Task<IReadOnlyList<FullTextSearchHit>> SearchAsync(Guid userId, string query, int limit, CancellationToken ct = default)
     {
-        if (!IsSqlite || string.IsNullOrWhiteSpace(query)) return Array.Empty<FullTextSearchHit>();
+        if (string.IsNullOrWhiteSpace(query)) return Array.Empty<FullTextSearchHit>();
+        var workspaceId = (await _workspaces.GetCurrentWorkspaceAsync(userId, ct))?.Id;
+        var expanded = await _terminology.ExpandQueryAsync(userId, workspaceId, query, targetLanguage: "zh-CN", ct: ct);
+        var terms = _tokenizer.Tokenize(string.Join(' ', expanded)).Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(64).ToList();
+        if (!IsSqlite)
+            return await PortableSearchAsync(userId, workspaceId, expanded, terms, limit, ct);
         await EnsureCreatedAsync(ct);
-        var expanded = await _terminology.ExpandQueryAsync(userId, query, ct);
-        var terms = _tokenizer.Tokenize(string.Join(' ', expanded)).Split(' ', StringSplitOptions.RemoveEmptyEntries).Distinct().Take(24);
         var match = string.Join(" OR ", terms.Select(t => $"\"{t.Replace("\"", "\"\"")}\""));
         if (match.Length == 0) return Array.Empty<FullTextSearchHit>();
 
@@ -749,8 +1099,18 @@ public sealed class ChineseFullTextIndexService : IChineseFullTextIndexService
         try
         {
             await using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT document_id, chunk_id, bm25(document_chunks_fts) FROM document_chunks_fts WHERE document_chunks_fts MATCH $match AND user_id = $userId ORDER BY bm25(document_chunks_fts) LIMIT $limit";
+            cmd.CommandText = workspaceId.HasValue
+                ? """
+                  SELECT document_chunks_fts.document_id, document_chunks_fts.chunk_id, bm25(document_chunks_fts)
+                  FROM document_chunks_fts
+                  JOIN documents d ON CAST(d.id AS TEXT) = document_chunks_fts.document_id
+                  WHERE document_chunks_fts MATCH $match AND document_chunks_fts.user_id = $userId
+                    AND CAST(d.workspace_id AS TEXT) = $workspaceId
+                  ORDER BY bm25(document_chunks_fts) LIMIT $limit
+                  """
+                : "SELECT document_id, chunk_id, bm25(document_chunks_fts) FROM document_chunks_fts WHERE document_chunks_fts MATCH $match AND user_id = $userId ORDER BY bm25(document_chunks_fts) LIMIT $limit";
             Add(cmd, "$match", match); Add(cmd, "$userId", userId.ToString()); Add(cmd, "$limit", Math.Clamp(limit, 1, 100));
+            if (workspaceId.HasValue) Add(cmd, "$workspaceId", workspaceId.Value.ToString());
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
                 if (Guid.TryParse(reader.GetString(0), out var docId) && Guid.TryParse(reader.GetString(1), out var chunkId))
@@ -758,6 +1118,47 @@ public sealed class ChineseFullTextIndexService : IChineseFullTextIndexService
         }
         finally { if (close) await connection.CloseAsync(); }
         return hits;
+    }
+
+    private async Task<IReadOnlyList<FullTextSearchHit>> PortableSearchAsync(
+        Guid userId, Guid? workspaceId, IReadOnlyList<string> expanded, IReadOnlyList<string> tokens,
+        int limit, CancellationToken ct)
+    {
+        var documentQuery = _db.Documents.AsNoTracking().Where(d => d.UserId == userId);
+        if (workspaceId.HasValue) documentQuery = documentQuery.Where(d => d.WorkspaceId == workspaceId);
+        var documents = await documentQuery.OrderByDescending(d => d.UpdatedAt).Take(5000)
+            .Select(d => new { d.Id, d.Title, d.TitleZh, d.Summary, d.SummaryZh, d.KeywordsZh, d.ContentText })
+            .ToListAsync(ct);
+        if (documents.Count == 0) return Array.Empty<FullTextSearchHit>();
+        var docIds = documents.Select(d => d.Id).ToList();
+        var chunks = await _db.DocumentChunks.AsNoTracking().Where(c => docIds.Contains(c.DocumentId))
+            .OrderByDescending(c => c.CreatedAt).Take(20000)
+            .Select(c => new { c.Id, c.DocumentId, c.ChunkTitle, c.Content, c.ContentOriginal, c.ContentNormalized })
+            .ToListAsync(ct);
+        var chunkIds = chunks.Select(c => c.Id).ToList();
+        var localized = await _db.ChunkLocalizations.AsNoTracking()
+            .Where(x => chunkIds.Contains(x.ChunkId) && (x.Status == "done" || x.Status == "review_required"))
+            .Select(x => new { x.ChunkId, x.HeadingLocalized, x.ContentLocalized }).ToDictionaryAsync(x => x.ChunkId, ct);
+        var documentMap = documents.ToDictionary(d => d.Id);
+        var scored = new List<FullTextSearchHit>();
+        foreach (var chunk in chunks)
+        {
+            documentMap.TryGetValue(chunk.DocumentId, out var doc);
+            localized.TryGetValue(chunk.Id, out var translation);
+            var text = string.Join(' ', new[]
+            {
+                doc?.Title, doc?.TitleZh, doc?.Summary, doc?.SummaryZh, doc?.KeywordsZh, doc?.ContentText,
+                chunk.ChunkTitle, chunk.ContentNormalized, chunk.ContentOriginal, chunk.Content,
+                translation?.HeadingLocalized, translation?.ContentLocalized
+            }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            if (text.Length == 0) continue;
+            var exact = expanded.Count(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
+            var lexical = tokens.Count(token => text.Contains(token, StringComparison.OrdinalIgnoreCase));
+            if (exact == 0 && lexical == 0) continue;
+            var rank = Math.Min(1d, (exact * 3d + lexical) / Math.Max(4d, tokens.Count + 3d));
+            scored.Add(new FullTextSearchHit(chunk.DocumentId, chunk.Id, rank, "fts_portable"));
+        }
+        return scored.OrderByDescending(x => x.Rank).Take(Math.Clamp(limit, 1, 100)).ToList();
     }
 
     private bool IsSqlite => _db.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true;

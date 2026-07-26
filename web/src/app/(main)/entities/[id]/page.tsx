@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -28,7 +28,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { EntityTypeBadge, AiStatusBadge } from "@/components/ai-badge";
+import { EntityTypeBadge } from "@/components/ai-badge";
+import { EntityAliasEditor } from "@/components/entity/entity-alias-editor";
 
 function formatDate(dateStr?: string): string {
   if (!dateStr) return "-";
@@ -46,6 +47,7 @@ export default function EntityDetailPage() {
   const params = useParams();
   const router = useRouter();
   const entityId = params.id as string;
+  const queryClient = useQueryClient();
 
   const { data: entity, isLoading } = useQuery({
     queryKey: ["entity", entityId],
@@ -96,6 +98,11 @@ export default function EntityDetailPage() {
       </Button>
 
       {/* 实体基本信息 */}
+      {entity.redirectedFrom && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          当前链接使用的是已合并实体，已自动重定向到主实体 {entity.id}。
+        </div>
+      )}
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between">
@@ -109,6 +116,7 @@ export default function EntityDetailPage() {
                   规范化名称: {entity.normalizedName}
                 </CardDescription>
               )}
+              <p className="mt-1 text-xs text-muted-foreground">状态：{entity.status === "merged" ? "已合并" : entity.isArchived ? "已归档" : "标准实体"} · 版本 {entity.rowVersion}</p>
             </div>
           </div>
         </CardHeader>
@@ -162,6 +170,16 @@ export default function EntityDetailPage() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">别名与多语言名称</CardTitle>
+          <CardDescription>已验证别名会用于搜索扩展、智能问答和实体消歧。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <EntityAliasEditor entityId={entity.id} aliases={entity.aliases} onChanged={() => void queryClient.invalidateQueries({ queryKey: ["entity", entityId] })} />
+        </CardContent>
+      </Card>
+
       {/* 关联文档列表 */}
       <Card>
         <CardHeader>
@@ -191,17 +209,17 @@ export default function EntityDetailPage() {
               </TableHeader>
               <TableBody>
                 {entity.relatedDocuments.map((doc) => (
-                  <TableRow key={doc.id}>
+                  <TableRow key={doc.documentId}>
                     <TableCell>
                       <Link
-                        href={`/documents/${doc.id}`}
+                        href={`/documents/${doc.documentId}`}
                         className="truncate font-medium text-primary hover:underline"
                       >
                         {doc.title || "未命名"}
                       </Link>
                     </TableCell>
                     <TableCell>
-                      <AiStatusBadge status={doc.aiStatus} />
+                      <span className="text-sm text-muted-foreground">提及 {doc.mentionCount} 次</span>
                     </TableCell>
                   </TableRow>
                 ))}

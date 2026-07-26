@@ -53,10 +53,25 @@ public interface ILocalizationQualityService
 
 public interface ITerminologyService
 {
-    Task<IReadOnlyList<Terminology>> ListAsync(Guid userId, string? query = null, CancellationToken ct = default);
-    Task<Terminology> UpsertAsync(Guid userId, Terminology term, CancellationToken ct = default);
-    Task<bool> DeleteAsync(Guid userId, Guid id, CancellationToken ct = default);
-    Task<IReadOnlyList<string>> ExpandQueryAsync(Guid userId, string query, CancellationToken ct = default);
+    Task<PagedResult<Terminology>> ListAsync(Guid userId, Guid workspaceId, TerminologyQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<Terminology>> SelectForContentAsync(Guid userId, Guid? workspaceId, string? sourceLanguage,
+        string? targetLanguage, string? domain, string? content, int maxPromptCharacters = 12000,
+        CancellationToken ct = default);
+    Task<Terminology> UpsertAsync(Guid userId, Guid workspaceId, Terminology term, bool queueReprocess = true,
+        CancellationToken ct = default);
+    Task<bool> DeleteAsync(Guid userId, Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<string>> ExpandQueryAsync(Guid userId, Guid? workspaceId, string query,
+        string? sourceLanguage = null, string? targetLanguage = null, string? domain = null,
+        CancellationToken ct = default);
+    Task<TerminologyBulkResult> BulkUpsertAsync(Guid userId, Guid workspaceId, TerminologyBulkRequest request,
+        CancellationToken ct = default);
+    Task<Terminology> ReviewAsync(Guid userId, Guid workspaceId, Guid id, string status, CancellationToken ct = default);
+    Task<IReadOnlyList<TerminologyConflict>> ListConflictsAsync(Guid userId, Guid workspaceId, CancellationToken ct = default);
+    Task<TerminologyStats> GetStatsAsync(Guid userId, Guid workspaceId, CancellationToken ct = default);
+    Task<IReadOnlyList<TerminologyUsage>> GetUsageAsync(Guid userId, Guid workspaceId,
+        IReadOnlyCollection<Guid> terminologyIds, CancellationToken ct = default);
+    Task<IReadOnlyList<TerminologyCandidate>> ExtractCandidatesAsync(Guid userId, Guid workspaceId,
+        TerminologyExtractionRequest request, CancellationToken ct = default);
 }
 
 public interface IChineseTokenizer

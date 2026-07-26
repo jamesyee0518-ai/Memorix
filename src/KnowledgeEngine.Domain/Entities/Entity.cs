@@ -21,4 +21,19 @@ public class Entity
     public int UsageCount { get; set; }
     public bool IsVerified { get; set; }
     public bool IsArchived { get; set; }
+
+    // Entity resolution V1 fields. Name/NormalizedName remain compatibility aliases
+    // while callers migrate to the canonical identity model.
+    public string? CanonicalName { get; set; }
+    public string? PreferredNameZh { get; set; }
+    public string? PreferredNameEn { get; set; }
+    public string? Abbreviation { get; set; }
+    public string? NormalizedKey { get; set; }
+    public string Status { get; set; } = "active";
+    public Guid? MergedIntoId { get; set; }
+    public decimal? Confidence { get; set; }
+    public int SourceCount { get; set; }
+    public int MentionCount { get; set; }
+    public long RowVersion { get; set; }
+    public string NormalizationVersion { get; set; } = "entity_norm_v1";
 }

@@ -4,8 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Loader2, Network, ScanSearch, SlidersHorizontal } from "lucide-react";
-import { documentApi } from "@/lib/api";
-import { buildEntityCooccurrenceGraph, buildTextextureGraph, type ScanMode } from "@/lib/textexture";
+import { documentApi, knowledgeGraphApi } from "@/lib/api";
+import { buildCanonicalEntityGraph, buildTextextureGraph, type ScanMode } from "@/lib/textexture";
 import { TextNetwork } from "@/components/knowledge-graph/text-network";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -27,14 +27,25 @@ export default function KnowledgeGraphPage() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [windowSize, setWindowSize] = useState(5);
   const [panelOpen, setPanelOpen] = useState(true);
-  const { data: corpus = [], isLoading, isError } = useQuery({ queryKey: ["knowledge-graph-corpus"], queryFn: loadCorpus });
+  const corpusQuery = useQuery({ queryKey: ["knowledge-graph-corpus"], queryFn: loadCorpus });
+  const entityGraphQuery = useQuery({
+    queryKey: ["knowledge-graph-entities"],
+    queryFn: () => knowledgeGraphApi.getEntities({ language: "zh-CN", limit: 500 }),
+  });
+  const corpus = corpusQuery.data ?? [];
+  const standardGraph = entityGraphQuery.data;
   const graph = useMemo(() => viewMode === "entities"
-    ? buildEntityCooccurrenceGraph(corpus)
-    : buildTextextureGraph(corpus.map((item) => item.text), { mode, windowSize }), [corpus, mode, viewMode, windowSize]);
+    ? buildCanonicalEntityGraph(standardGraph ?? { nodes: [], edges: [] })
+    : buildTextextureGraph(corpus.map((item) => item.text), { mode, windowSize }), [corpus, mode, standardGraph, viewMode, windowSize]);
   const selectedGraphNode = graph.nodes.find((node) => node.id === selectedNode);
-  const relatedDocuments = selectedGraphNode?.documentIds
-    ? corpus.filter((document) => selectedGraphNode.documentIds?.includes(document.id))
-    : [];
+  const entityDocumentsQuery = useQuery({
+    queryKey: ["knowledge-graph-entity-documents", selectedNode],
+    queryFn: () => knowledgeGraphApi.getDocuments(selectedNode!, { language: "zh-CN", limit: 100 }),
+    enabled: viewMode === "entities" && Boolean(selectedNode),
+  });
+  const relatedDocuments = entityDocumentsQuery.data ?? [];
+  const isLoading = viewMode === "entities" ? entityGraphQuery.isLoading : corpusQuery.isLoading;
+  const isError = viewMode === "entities" ? entityGraphQuery.isError : corpusQuery.isError;
   const graphInsights = useMemo(() => {
     const weights = graph.edges.map((edge) => edge.weight);
     return {
@@ -82,10 +93,10 @@ export default function KnowledgeGraphPage() {
             </>}
             </div>
             <div className="grid grid-cols-3 gap-1.5">
-              {[{ label: "文档", value: corpus.length }, { label: "实体", value: graph.nodes.length }, { label: "关系", value: graph.edges.length }].map((item) => <div key={item.label} className="rounded-lg border bg-background p-2 text-center"><div className="text-lg font-bold tabular-nums">{item.value}</div><div className="text-[10px] text-muted-foreground">{item.label}</div></div>)}
+              {[{ label: "文档", value: viewMode === "entities" ? (standardGraph?.documentCount ?? 0) : corpus.length }, { label: "实体", value: graph.nodes.length }, { label: "关系", value: graph.edges.length }].map((item) => <div key={item.label} className="rounded-lg border bg-background p-2 text-center"><div className="text-lg font-bold tabular-nums">{item.value}</div><div className="text-[10px] text-muted-foreground">{item.label}</div></div>)}
             </div>
             <div className="border-t pt-3">
-              {selectedGraphNode && viewMode === "entities" && <><h3 className="mb-1 text-sm font-semibold">{selectedGraphNode.label}</h3><p className="mb-3 text-xs text-muted-foreground">相关文章 {relatedDocuments.length} 篇</p><div className="mb-4 space-y-2">{relatedDocuments.map((document) => <Link key={document.id} href={`/documents/${document.id}`} className="block rounded-md bg-muted/60 px-2.5 py-2 text-xs leading-5 hover:bg-muted"><span className="line-clamp-2 font-medium">{document.title}</span></Link>)}</div></>}
+              {selectedGraphNode && viewMode === "entities" && <><h3 className="mb-1 text-sm font-semibold">{selectedGraphNode.label}</h3><p className="mb-3 text-xs text-muted-foreground">相关文章 {relatedDocuments.length} 篇</p><div className="mb-4 space-y-2">{relatedDocuments.map((document) => <Link key={document.documentId} href={`/documents/${document.documentId}`} className="block rounded-md bg-muted/60 px-2.5 py-2 text-xs leading-5 hover:bg-muted"><span className="line-clamp-2 font-medium">{document.title}</span>{document.originalMention && <span className="mt-1 block truncate text-[11px] text-muted-foreground">原文提及：{document.originalMention}</span>}</Link>)}</div></>}
               <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Hub 实体</h3>
               <div className="space-y-2">{graphInsights.hubs.map((node, index) => <div key={node.id} className="flex items-center gap-2 text-xs"><span className="w-4 text-right font-medium text-primary">{index + 1}</span><span className="min-w-0 flex-1 truncate font-medium">{node.label}</span><div className="h-1.5 w-12 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-[#00b8c8]" style={{ width: `${Math.max(8, node.degree / Math.max(1, graphInsights.hubs[0]?.degree ?? 1) * 100)}%` }} /></div><span className="w-7 text-right tabular-nums text-muted-foreground">{node.frequency}</span></div>)}</div>
             </div>

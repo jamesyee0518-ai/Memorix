@@ -15,7 +15,8 @@ public sealed class MultilingualBatchJobService : IMultilingualBatchJobService
     public async Task<MultilingualBatchJob> EnqueueAsync(Guid userId, Guid documentId, string jobType, bool force,
         int maxChunks, CancellationToken ct = default)
     {
-        if (jobType is not ("translate" or "enrich" or "multi_vector")) throw new ArgumentException("Unsupported job type");
+        if (jobType is not ("translate" or "enrich" or "multi_vector" or "glossary_reprocess"))
+            throw new ArgumentException("Unsupported job type");
         if (!await _db.Documents.AsNoTracking().AnyAsync(x => x.Id == documentId && x.UserId == userId, ct))
             throw new KeyNotFoundException("Document not found");
         var active = await _db.MultilingualBatchJobs.FirstOrDefaultAsync(x => x.UserId == userId
@@ -87,6 +88,9 @@ public sealed class MultilingualBatchWorker : BackgroundService
             if (job == null) return;
             job.Status = "running"; job.StartedAt ??= DateTime.UtcNow; job.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct); jobId = job.Id;
+            if (job.JobType == "glossary_reprocess" && job.ProcessedItems == 0)
+                await scope.ServiceProvider.GetRequiredService<IL1LocalizationService>()
+                    .LocalizeDocumentAsync(job.DocumentId, ct);
         }
 
         while (!ct.IsCancellationRequested)
@@ -104,7 +108,7 @@ public sealed class MultilingualBatchWorker : BackgroundService
                 var document = await db.Documents.FirstOrDefaultAsync(x => x.Id == job.DocumentId, ct);
                 if (document != null)
                 {
-                    if (job.JobType == "translate")
+                    if (job.JobType is "translate" or "glossary_reprocess")
                     {
                         document.LocalizationLevel = job.ProcessedItems >= job.TotalItems && job.FailedItems == 0 ? "L3" : "L2";
                         document.LocalizationStatus = job.FailedItems == 0 ? "done" : "partial";
@@ -118,7 +122,7 @@ public sealed class MultilingualBatchWorker : BackgroundService
             job.CurrentChunkId = chunkId; job.UpdatedAt = DateTime.UtcNow; await db.SaveChangesAsync(ct);
             try
             {
-                if (job.JobType == "translate")
+                if (job.JobType is "translate" or "glossary_reprocess")
                     await scope.ServiceProvider.GetRequiredService<IChunkLocalizationService>()
                         .TranslateAsync(job.UserId, chunkId.Value, new ChunkTranslationRequest("zh-CN", job.Force), ct);
                 else if (job.JobType == "enrich")

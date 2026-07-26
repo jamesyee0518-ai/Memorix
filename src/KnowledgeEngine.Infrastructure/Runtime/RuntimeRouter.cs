@@ -5,6 +5,7 @@ using KnowledgeEngine.Infrastructure.Storage;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -27,19 +28,22 @@ public class RuntimeRouter
     private readonly IAppDbContext _db;
     private readonly ILogger<RuntimeRouter> _logger;
     private readonly LocalFileStorageSettings _localFsSettings;
+    private readonly IConfiguration _configuration;
 
     public RuntimeRouter(
         IServiceProvider serviceProvider,
         IConfigService configService,
         IAppDbContext db,
         ILogger<RuntimeRouter> logger,
-        IOptions<LocalFileStorageSettings> localFsSettings)
+        IOptions<LocalFileStorageSettings> localFsSettings,
+        IConfiguration configuration)
     {
         _serviceProvider = serviceProvider;
         _configService = configService;
         _db = db;
         _logger = logger;
         _localFsSettings = localFsSettings.Value;
+        _configuration = configuration;
     }
 
     /// <summary>
@@ -85,6 +89,13 @@ public class RuntimeRouter
             var logger = _serviceProvider.GetRequiredService<ILogger<LocalKnowledgeRepository>>();
             _logger.LogInformation("RuntimeRouter: using LocalKnowledgeRepository (SQLite at {Path})", dbPath);
             return new LocalKnowledgeRepository(dbPath, logger);
+        }
+
+        if (string.Equals(
+            _configuration["DatabaseProvider"], "sqlite", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Cloud workspace data must be accessed through the desktop cloud gateway; local database fallback is disabled.");
         }
 
         _logger.LogInformation("RuntimeRouter: using CloudKnowledgeRepository (PostgreSQL)");

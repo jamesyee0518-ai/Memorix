@@ -17,6 +17,15 @@ public interface IAppDbContext
     DbSet<Tag> Tags { get; }
     DbSet<DocumentTag> DocumentTags { get; }
     DbSet<Entity> Entities { get; }
+    DbSet<EntityAlias> EntityAliases { get; }
+    DbSet<EntityMention> EntityMentions { get; }
+    DbSet<EntityExternalId> EntityExternalIds { get; }
+    DbSet<EntityResolutionCandidate> EntityResolutionCandidates { get; }
+    DbSet<EntityEmbedding> EntityEmbeddings { get; }
+    DbSet<EntityGovernanceTask> EntityGovernanceTasks { get; }
+    DbSet<EntityMergeLog> EntityMergeLogs { get; }
+    DbSet<EntityMergeBlocklist> EntityMergeBlocklist { get; }
+    DbSet<EntityOutboxEvent> EntityOutboxEvents { get; }
     DbSet<DocumentEntity> DocumentEntities { get; }
     DbSet<EntityRelation> EntityRelations { get; }
     DbSet<AiJob> AiJobs { get; }

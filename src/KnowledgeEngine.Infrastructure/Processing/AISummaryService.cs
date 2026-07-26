@@ -158,15 +158,33 @@ public class AISummaryService : IAISummaryService
             Entities = (analysis.Entities ?? new()).Select(e => new EntityResult
             {
                 Name = e.Name,
+                Mention = e.Mention,
+                CanonicalNameSuggestion = e.CanonicalNameSuggestion,
                 EntityType = e.EntityType,
                 Description = e.Description,
+                Evidence = e.Evidence,
+                StartOffset = e.StartOffset,
+                EndOffset = e.EndOffset,
                 Confidence = e.Confidence,
                 Importance = e.Importance,
                 MentionCount = e.MentionCount,
                 Aliases = e.Aliases,
+                AliasDetails = e.AliasDetails?.Select(a => new EntityAliasResult
+                {
+                    Value = a.Value,
+                    Language = a.Language,
+                    AliasType = a.AliasType
+                }).ToList(),
+                ExternalIds = e.ExternalIds?.Select(x => new EntityExternalIdResult
+                {
+                    IdType = x.IdType,
+                    IdValue = x.IdValue,
+                    Source = x.Source
+                }).ToList(),
                 Examples = e.Examples,
                 Role = e.Role,
-                Sentiment = e.Sentiment
+                Sentiment = e.Sentiment,
+                FirstMention = e.Mention ?? e.Examples?.FirstOrDefault()
             }).ToList()
         };
     }
@@ -367,11 +385,26 @@ public class AISummaryService : IAISummaryService
         [JsonPropertyName("name")]
         public string? Name { get; set; }
 
+        [JsonPropertyName("mention")]
+        public string? Mention { get; set; }
+
+        [JsonPropertyName("canonical_name_suggestion")]
+        public string? CanonicalNameSuggestion { get; set; }
+
         [JsonPropertyName("entity_type")]
         public string? EntityType { get; set; }
 
         [JsonPropertyName("description")]
         public string? Description { get; set; }
+
+        [JsonPropertyName("evidence")]
+        public string? Evidence { get; set; }
+
+        [JsonPropertyName("start_offset")]
+        public int? StartOffset { get; set; }
+
+        [JsonPropertyName("end_offset")]
+        public int? EndOffset { get; set; }
 
         [JsonPropertyName("confidence")]
         public decimal? Confidence { get; set; }
@@ -385,6 +418,12 @@ public class AISummaryService : IAISummaryService
         [JsonPropertyName("aliases")]
         public List<string>? Aliases { get; set; }
 
+        [JsonPropertyName("alias_details")]
+        public List<EntityAliasDto>? AliasDetails { get; set; }
+
+        [JsonPropertyName("external_ids")]
+        public List<EntityExternalIdDto>? ExternalIds { get; set; }
+
         [JsonPropertyName("examples")]
         public List<string>? Examples { get; set; }
 
@@ -393,5 +432,29 @@ public class AISummaryService : IAISummaryService
 
         [JsonPropertyName("sentiment")]
         public string? Sentiment { get; set; }
+    }
+
+    private class EntityAliasDto
+    {
+        [JsonPropertyName("value")]
+        public string? Value { get; set; }
+
+        [JsonPropertyName("language")]
+        public string? Language { get; set; }
+
+        [JsonPropertyName("alias_type")]
+        public string? AliasType { get; set; }
+    }
+
+    private class EntityExternalIdDto
+    {
+        [JsonPropertyName("id_type")]
+        public string? IdType { get; set; }
+
+        [JsonPropertyName("id_value")]
+        public string? IdValue { get; set; }
+
+        [JsonPropertyName("source")]
+        public string? Source { get; set; }
     }
 }

@@ -168,11 +168,29 @@ public class SqliteInitializer
         await AddColumnIfNotExistsAsync(conn, "chunk_embeddings", "localization_id", "TEXT", ct);
         await AddColumnIfNotExistsAsync(conn, "chunk_embeddings", "source_content_hash", "TEXT", ct);
 
+        // Entity resolution V1 compatibility columns.
+        await AddColumnIfNotExistsAsync(conn, "entities", "canonical_name", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "preferred_name_zh", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "preferred_name_en", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "abbreviation", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "normalized_key", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "entity_status", "TEXT NOT NULL DEFAULT 'active'", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "merged_into_id", "TEXT", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "entity_confidence", "REAL", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "source_count", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "mention_count", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "row_version", "INTEGER NOT NULL DEFAULT 0", ct);
+        await AddColumnIfNotExistsAsync(conn, "entities", "normalization_version", "TEXT NOT NULL DEFAULT 'entity_norm_v1'", ct);
+
         await using (var backfill = conn.CreateCommand())
         {
             backfill.CommandText = @"UPDATE documents SET title_original = title WHERE title_original IS NULL;
 UPDATE documents SET primary_language = language WHERE primary_language IS NULL AND language IS NOT NULL;
-UPDATE document_chunks SET content_original = content WHERE content_original = '';";
+UPDATE document_chunks SET content_original = content WHERE content_original = '';
+UPDATE entities SET canonical_name = COALESCE(canonical_name, name),
+    normalized_key = COALESCE(normalized_key, normalized_name, lower(name)),
+    entity_status = COALESCE(NULLIF(entity_status, ''), 'active'),
+    normalization_version = COALESCE(NULLIF(normalization_version, ''), 'entity_norm_v1');";
             await backfill.ExecuteNonQueryAsync(ct);
         }
 
@@ -690,7 +708,10 @@ UPDATE document_chunks SET content_original = content WHERE content_original = '
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
-        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_terminology_user_pair ON terminology(user_id, source_term, target_term)",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_terminology_workspace_pair
+            ON terminology(user_id, workspace_id, source_language, source_term, target_language, target_term)",
+        @"CREATE INDEX IF NOT EXISTS idx_terminology_workspace_review
+            ON terminology(user_id, workspace_id, review_status, priority)",
         @"CREATE TABLE IF NOT EXISTS chunk_localizations (
             id TEXT PRIMARY KEY, chunk_id TEXT NOT NULL, user_id TEXT NOT NULL, workspace_id TEXT,
             language_code TEXT NOT NULL, heading_localized TEXT, content_localized TEXT NOT NULL,
@@ -773,11 +794,208 @@ UPDATE document_chunks SET content_original = content WHERE content_original = '
             usage_count INTEGER NOT NULL DEFAULT 0,
             is_verified INTEGER NOT NULL DEFAULT 0,
             is_archived INTEGER NOT NULL DEFAULT 0,
+            canonical_name TEXT,
+            preferred_name_zh TEXT,
+            preferred_name_en TEXT,
+            abbreviation TEXT,
+            normalized_key TEXT,
+            entity_status TEXT NOT NULL DEFAULT 'active',
+            merged_into_id TEXT,
+            entity_confidence REAL,
+            source_count INTEGER NOT NULL DEFAULT 0,
+            mention_count INTEGER NOT NULL DEFAULT 0,
+            row_version INTEGER NOT NULL DEFAULT 0,
+            normalization_version TEXT NOT NULL DEFAULT 'entity_norm_v1',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(workspace_id, normalized_name, entity_type)
         )",
         @"CREATE INDEX IF NOT EXISTS idx_entities_workspace ON entities(workspace_id, entity_type)",
+        @"CREATE INDEX IF NOT EXISTS idx_entities_workspace_status ON entities(workspace_id, entity_status, entity_type)",
+        @"CREATE INDEX IF NOT EXISTS idx_entities_workspace_redirect ON entities(workspace_id, merged_into_id)",
+
+        // ===== entity_aliases / mentions / candidates (Entity Resolution V1) =====
+        @"CREATE TABLE IF NOT EXISTS entity_aliases (
+            id TEXT PRIMARY KEY,
+            entity_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            alias TEXT NOT NULL,
+            normalized_alias TEXT NOT NULL,
+            language_code TEXT,
+            alias_type TEXT NOT NULL DEFAULT 'MODEL_GENERATED',
+            source_type TEXT NOT NULL DEFAULT 'ai',
+            source_id TEXT,
+            confidence REAL,
+            is_verified INTEGER NOT NULL DEFAULT 0,
+            valid_from TEXT,
+            valid_to TEXT,
+            normalization_version TEXT NOT NULL DEFAULT 'entity_norm_v1',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(entity_id, normalized_alias)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_aliases_workspace_normalized ON entity_aliases(workspace_id, normalized_alias)",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_aliases_workspace_verified ON entity_aliases(workspace_id, is_verified)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_mentions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            chunk_id TEXT,
+            entity_id TEXT,
+            mention_text TEXT NOT NULL,
+            normalized_mention TEXT NOT NULL,
+            suggested_type TEXT NOT NULL DEFAULT 'CONCEPT',
+            context_text TEXT,
+            start_offset INTEGER,
+            end_offset INTEGER,
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            extraction_batch_id TEXT NOT NULL,
+            extraction_model TEXT,
+            model_version TEXT,
+            prompt_version TEXT,
+            schema_version TEXT NOT NULL DEFAULT 'entity_mention_v1',
+            extraction_confidence REAL,
+            resolution_status TEXT NOT NULL DEFAULT 'UNRESOLVED',
+            resolution_method TEXT,
+            resolution_score REAL,
+            resolver_version TEXT NOT NULL DEFAULT 'entity_resolver_v1',
+            reason_codes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_mentions_document_batch ON entity_mentions(document_id, extraction_batch_id)",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_mentions_workspace_status ON entity_mentions(workspace_id, resolution_status)",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_mentions_entity ON entity_mentions(entity_id)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_external_ids (
+            id TEXT PRIMARY KEY,
+            entity_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            id_type TEXT NOT NULL,
+            id_value TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'ai',
+            is_verified INTEGER NOT NULL DEFAULT 0,
+            confidence REAL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, id_type, id_value)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_external_ids_entity ON entity_external_ids(entity_id)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_resolution_candidates (
+            id TEXT PRIMARY KEY,
+            mention_id TEXT NOT NULL,
+            candidate_entity_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            candidate_rank INTEGER NOT NULL,
+            name_score REAL NOT NULL DEFAULT 0,
+            alias_score REAL NOT NULL DEFAULT 0,
+            description_score REAL NOT NULL DEFAULT 0,
+            context_score REAL NOT NULL DEFAULT 0,
+            relation_score REAL NOT NULL DEFAULT 0,
+            source_score REAL NOT NULL DEFAULT 0,
+            total_score REAL NOT NULL DEFAULT 0,
+            decision TEXT NOT NULL DEFAULT 'PENDING',
+            reason_codes TEXT,
+            resolver_version TEXT NOT NULL DEFAULT 'entity_resolver_v1',
+            llm_decision TEXT,
+            llm_confidence REAL,
+            llm_explanation TEXT,
+            llm_model TEXT,
+            llm_prompt_version TEXT,
+            llm_input_tokens INTEGER,
+            llm_output_tokens INTEGER,
+            created_at TEXT NOT NULL,
+            UNIQUE(mention_id, candidate_entity_id)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_candidates_workspace_decision ON entity_resolution_candidates(workspace_id, decision)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_embeddings (
+            id TEXT PRIMARY KEY,
+            entity_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            model_version TEXT,
+            dimension INTEGER,
+            embedding_type TEXT NOT NULL,
+            embedding_json TEXT,
+            content_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error_message TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(entity_id, embedding_type, provider, model)
+        )",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_embeddings_workspace_status ON entity_embeddings(workspace_id, status, embedding_type)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_governance_tasks (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            task_type TEXT NOT NULL,
+            parent_task_id TEXT,
+            subject_entity_id TEXT,
+            candidate_entity_id TEXT,
+            mention_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            priority INTEGER NOT NULL DEFAULT 0,
+            assignee_id TEXT,
+            idempotency_key TEXT,
+            cursor TEXT,
+            total_items INTEGER NOT NULL DEFAULT 0,
+            processed_items INTEGER NOT NULL DEFAULT 0,
+            succeeded_items INTEGER NOT NULL DEFAULT 0,
+            failed_items INTEGER NOT NULL DEFAULT 0,
+            score REAL,
+            reason_codes TEXT,
+            payload TEXT,
+            result TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_governance_idempotency ON entity_governance_tasks(workspace_id, idempotency_key)",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_governance_pair ON entity_governance_tasks(parent_task_id, subject_entity_id, candidate_entity_id)",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_governance_queue ON entity_governance_tasks(workspace_id, task_type, status, priority)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_merge_logs (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+            batch_id TEXT NOT NULL, source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL,
+            reason TEXT NOT NULL, method TEXT NOT NULL, score REAL, operator_id TEXT,
+            device_id TEXT, request_id TEXT, before_snapshot TEXT NOT NULL,
+            migration_summary TEXT, expected_source_version INTEGER NOT NULL,
+            expected_target_version INTEGER NOT NULL, status TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL,
+            completed_at TEXT, reverted_at TEXT
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_merge_idempotency ON entity_merge_logs(workspace_id, idempotency_key)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_merge_blocklist (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+            entity_id_a TEXT NOT NULL, entity_id_b TEXT NOT NULL,
+            reason TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual',
+            operator_id TEXT, is_permanent INTEGER NOT NULL DEFAULT 1,
+            valid_until TEXT, created_at TEXT NOT NULL
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_merge_block_pair ON entity_merge_blocklist(workspace_id, entity_id_a, entity_id_b)",
+
+        @"CREATE TABLE IF NOT EXISTS entity_outbox_events (
+            id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+            entity_id TEXT NOT NULL, event_type TEXT NOT NULL,
+            entity_version INTEGER NOT NULL, payload TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            retry_count INTEGER NOT NULL DEFAULT 0, error_message TEXT,
+            created_at TEXT NOT NULL, processed_at TEXT
+        )",
+        @"CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_outbox_idempotency ON entity_outbox_events(idempotency_key)",
+        @"CREATE INDEX IF NOT EXISTS idx_entity_outbox_queue ON entity_outbox_events(workspace_id, status, created_at)",
 
         // ===== document_entities (Phase 4) =====
         @"CREATE TABLE IF NOT EXISTS document_entities (

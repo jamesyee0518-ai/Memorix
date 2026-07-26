@@ -381,8 +381,15 @@ export interface ProcessingStatusResponse {
 
 export interface EntityListItem {
   id: string;
+  workspaceId: string;
   name: string;
+  canonicalName?: string;
+  preferredNameZh?: string;
+  preferredNameEn?: string;
+  abbreviation?: string;
   entityType: string;
+  status: string;
+  confidence?: number;
   description?: string;
   aliases?: string;
   source?: string;
@@ -394,11 +401,26 @@ export interface EntityListItem {
 
 export interface EntityDetail {
   id: string;
+  userId: string;
+  workspaceId: string;
   name: string;
+  canonicalName?: string;
+  preferredNameZh?: string;
+  preferredNameEn?: string;
+  abbreviation?: string;
   normalizedName?: string;
+  normalizedKey?: string;
+  normalizationVersion: string;
+  rowVersion: number;
   entityType: string;
+  status: string;
+  mergedIntoId?: string;
+  redirectedFrom?: string;
+  confidence?: number;
+  sourceCount: number;
+  mentionCount: number;
   description?: string;
-  aliases?: string;
+  aliases: EntityAlias[];
   source?: string;
   usageCount?: number;
   isVerified?: boolean;
@@ -406,7 +428,142 @@ export interface EntityDetail {
   metadata?: string;
   createdAt: string;
   updatedAt: string;
-  relatedDocuments: { id: string; title: string; aiStatus: string }[];
+  relatedDocuments: Array<{
+    documentId: string;
+    title: string;
+    mentionCount: number;
+    confidence?: number;
+    evidence?: string;
+  }>;
+}
+
+export interface EntityAlias {
+  id: string;
+  alias: string;
+  normalizedAlias: string;
+  languageCode?: string;
+  aliasType: string;
+  sourceType: string;
+  confidence?: number;
+  isVerified: boolean;
+}
+
+export interface EntityGraphNode {
+  id: string;
+  label: string;
+  canonicalName: string;
+  entityType: string;
+  mentionCount: number;
+  sourceCount: number;
+  degree: number;
+  documentIds: string[];
+}
+
+export interface EntityGraphEdge {
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationType: string;
+  weight: number;
+  evidenceDocumentCount: number;
+  evidenceDocumentIds: string[];
+}
+
+export interface EntityGraph {
+  nodes: EntityGraphNode[];
+  edges: EntityGraphEdge[];
+  documentCount: number;
+}
+
+export interface EntityGraphDocument {
+  documentId: string;
+  title: string;
+  originalMention?: string;
+  displayEntityName: string;
+  mentionCount: number;
+  evidence?: string;
+}
+
+export interface EntityGovernanceTask {
+  id: string;
+  workspaceId: string;
+  taskType: string;
+  parentTaskId?: string;
+  subjectEntityId?: string;
+  candidateEntityId?: string;
+  mentionId?: string;
+  status: string;
+  priority: number;
+  cursor?: string;
+  totalItems: number;
+  processedItems: number;
+  succeededItems: number;
+  failedItems: number;
+  score?: number;
+  reasonCodes: string[];
+  errorMessage?: string;
+  retryCount: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface EntityMergePreview {
+  sourceEntityId: string;
+  targetEntityId: string;
+  recommendationReason: string;
+  sourceVersion: number;
+  targetVersion: number;
+  mentionCount: number;
+  aliasCount: number;
+  externalIdCount: number;
+  documentAssociationCount: number;
+  relationCount: number;
+  aliasConflictCount: number;
+  externalIdConflictCount: number;
+  selfLoopCount: number;
+  hardBlocks: string[];
+  affectedIndexes: string[];
+  estimatedMilliseconds: number;
+  canExecute: boolean;
+}
+
+export interface EntityMergeHistoryItem {
+  mergeId: string;
+  workspaceId: string;
+  sourceEntityId: string;
+  targetEntityId: string;
+  reason: string;
+  method: string;
+  score?: number;
+  operatorId?: string;
+  status: string;
+  createdAt: string;
+  completedAt?: string;
+  revertedAt?: string;
+}
+
+export interface EntityQualityMetrics {
+  workspaceId?: string;
+  activeEntityCount: number;
+  mergedEntityCount: number;
+  aliasCount: number;
+  mentionCount: number;
+  linkedMentionCount: number;
+  unresolvedMentionCount: number;
+  mentionLinkRate: number;
+  unresolvedRate: number;
+  pendingReviewCount: number;
+  duplicateCandidateCount: number;
+  completedMergeCount: number;
+  revertedMergeCount: number;
+  mergeRevertRate: number;
+  estimatedDuplicateRate: number;
+  pendingOutboxCount: number;
+  failedOutboxCount: number;
+  oldestPendingOutboxSeconds?: number;
+  entityTypeDistribution: Record<string, number>;
+  normalizationVersionDistribution: Record<string, number>;
 }
 
 // ===== 标签 =====
@@ -433,6 +590,7 @@ export interface Tag {
 
 export interface Terminology {
   id: string;
+  workspaceId?: string;
   sourceLanguage: string;
   sourceTerm: string;
   targetLanguage: string;
@@ -444,6 +602,48 @@ export interface Terminology {
   version: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface TerminologyStats {
+  total: number;
+  approved: number;
+  pendingReview: number;
+  rejected: number;
+  conflicts: number;
+  pendingReprocessJobs: number;
+  domains: Record<string, number>;
+  languagePairs: Record<string, number>;
+}
+
+export interface TerminologyCandidate {
+  sourceTerm: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  suggestedTargetTerm?: string;
+  domain?: string;
+  occurrences: number;
+  documentIds: string[];
+}
+
+export interface TerminologyBulkResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  reprocessJobsQueued: number;
+  errors: string[];
+}
+
+export interface TerminologyConflict {
+  sourceLanguage: string;
+  sourceTerm: string;
+  targetLanguage: string;
+  terms: Terminology[];
+}
+
+export interface TerminologyUsage {
+  terminologyId: string;
+  documentCount: number;
+  chunkCount: number;
 }
 
 // ===== AI任务 =====
@@ -563,6 +763,11 @@ export interface Citation {
   section?: string;
   pageStart?: number;
   pageEnd?: number;
+  entities?: Array<{
+    entityId: string;
+    preferredName: string;
+    originalMention: string;
+  }>;
 }
 
 export interface RetrievalInfo {
@@ -1031,6 +1236,21 @@ export interface CloudAccountBinding {
   lastAuthenticatedAt?: string;
 }
 
+export interface CloudWorkspaceSummary {
+  id: string;
+  name: string;
+  mode: string;
+  role?: string;
+}
+
+export interface CloudWorkspaceDiscovery {
+  workspaces: CloudWorkspaceSummary[];
+  cloudApiVersion?: string;
+  compatible: boolean;
+  compatibilityMessage?: string;
+  capabilities: string[];
+}
+
 export interface WorkspaceBinding {
   id: string;
   localWorkspaceId: string;
@@ -1141,6 +1361,49 @@ export interface WorkspaceModeOption {
   label: string;
   description: string;
   available: boolean;
+  status: "ready" | "beta" | "preview" | "coming_soon" | string;
+  badge?: string;
+  reason?: string;
+  requiresAuthentication: boolean;
+  minimumCloudApiVersion?: string;
+}
+
+export interface DesktopFeatureCapability {
+  feature: string;
+  available: boolean;
+  status: "ready" | "beta" | "preview" | "coming_soon" | string;
+  badge?: string;
+  reason?: string;
+  requiresAuthentication: boolean;
+}
+
+export interface DesktopCapabilities {
+  modes: WorkspaceModeOption[];
+  cloudInbox: DesktopFeatureCapability;
+  capabilityVersion: string;
+  checkedAt: string;
+}
+
+export interface DesktopCloudConnectionStatus {
+  status: "connected" | "account_connected" | "not_connected" | string;
+  cloudAccountBindingId?: string;
+  accountDisplayName?: string;
+  accountEmailMasked?: string;
+  cloudApiHost?: string;
+  cloudWorkspaceId?: string;
+  lastAuthenticatedAt?: string;
+  requiresReauthentication: boolean;
+}
+
+export interface DesktopRuntimeState {
+  localWorkspaceId?: string;
+  workspaceName?: string;
+  mode: WorkspaceMode | "unconfigured";
+  routeTarget: "local" | "cloud_gateway" | "none" | string;
+  connectionStatus: string;
+  cloudWorkspaceId?: string;
+  generation: number;
+  localFallbackAllowed: boolean;
 }
 
 export interface ModelProviderOption {
@@ -1175,6 +1438,21 @@ export interface RuntimeHealth {
   cloudApi: string;
   overall: string;
   workspaceMode?: string;
+  checkedAt: string;
+}
+
+export interface WorkspaceRuntimeHealth {
+  workspaceId?: string;
+  workspaceName?: string;
+  workspaceMode?: string;
+  knowledgeStorage: string;
+  fileStorage: string;
+  backgroundProcessing: string;
+  aiService: string;
+  embeddingService: string;
+  cloudSync: string;
+  overall: string;
+  issues: string[];
   checkedAt: string;
 }
 

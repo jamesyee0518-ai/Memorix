@@ -3,8 +3,10 @@ using KnowledgeEngine.Domain.Entities;
 using KnowledgeEngine.Infrastructure.Processing;
 using KnowledgeEngine.Infrastructure.Runtime;
 using KnowledgeEngine.Infrastructure.Search;
+using KnowledgeEngine.Infrastructure.Db;
 using KnowledgeEngine.Application.DTOs;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -103,6 +105,70 @@ public class MultilingualProcessingTests
         Assert.True(result.Score < 85);
         Assert.Contains(result.Issues, issue => issue.Contains("128"));
         Assert.Contains(result.Issues, issue => issue.Contains("否定"));
+    }
+
+    [Fact]
+    public void LocalizationQuality_UsesApprovedAliasesAndIgnoresRejectedTerms()
+    {
+        var service = new LocalizationQualityService();
+        var result = service.Validate(
+            "The LLM gateway is enabled.",
+            "网关已启用。",
+            new[]
+            {
+                new Terminology
+                {
+                    SourceTerm = "Large Language Model", TargetTerm = "大语言模型",
+                    Aliases = "[\"LLM\"]", ReviewStatus = "approved"
+                },
+                new Terminology
+                {
+                    SourceTerm = "gateway", TargetTerm = "错误译法", ReviewStatus = "rejected"
+                }
+            });
+
+        Assert.Contains(result.Issues, issue => issue.Contains("Large Language Model"));
+        Assert.DoesNotContain(result.Issues, issue => issue.Contains("gateway"));
+    }
+
+    [Fact]
+    public async Task TerminologyService_IsolatesWorkspaceReviewLanguageAndExpandsAliases()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using var db = new AppDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        var service = new TerminologyService(db);
+        var userId = Guid.NewGuid();
+        var workspaceA = Guid.NewGuid();
+        var workspaceB = Guid.NewGuid();
+
+        await service.UpsertAsync(userId, workspaceA, new Terminology
+        {
+            SourceLanguage = "en", SourceTerm = "Large Language Model", TargetLanguage = "zh-CN",
+            TargetTerm = "大语言模型", Aliases = "LLM,大模型", ReviewStatus = "approved", Priority = 10
+        }, false);
+        await service.UpsertAsync(userId, workspaceA, new Terminology
+        {
+            SourceLanguage = "en", SourceTerm = "draft term", TargetLanguage = "zh-CN",
+            TargetTerm = "草稿术语", ReviewStatus = "pending"
+        }, false);
+        await service.UpsertAsync(userId, workspaceB, new Terminology
+        {
+            SourceLanguage = "en", SourceTerm = "Large Language Model", TargetLanguage = "zh-CN",
+            TargetTerm = "另一个工作区译法", ReviewStatus = "approved"
+        }, false);
+
+        var selected = await service.SelectForContentAsync(
+            userId, workspaceA, "en", "zh-CN", null, "An LLM application");
+        var term = Assert.Single(selected);
+        Assert.Equal("大语言模型", term.TargetTerm);
+
+        var expanded = await service.ExpandQueryAsync(userId, workspaceA, "LLM 应用", "en", "zh-CN");
+        Assert.Contains("Large Language Model", expanded);
+        Assert.Contains("大语言模型", expanded);
+        Assert.DoesNotContain("另一个工作区译法", expanded);
     }
 
     [Fact]

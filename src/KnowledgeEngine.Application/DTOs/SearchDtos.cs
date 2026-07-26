@@ -17,6 +17,9 @@ public class SearchRequest
     public string? Language { get; set; }
     public string EvidenceMode { get; set; } = "bilingual";
     public string FusionMode { get; set; } = "rrf";
+
+    [JsonIgnore]
+    public List<string>? ExpandedEntityTerms { get; set; }
 }
 
 public class SearchFilters
@@ -89,4 +92,6 @@ public class SearchDebugInfo
     public int? FullTextMatchCount { get; set; }
     public string? FusionMode { get; set; }
     public string? RewrittenQuery { get; set; }
+    public IReadOnlyList<Guid> RecognizedEntityIds { get; set; } = [];
+    public IReadOnlyList<string> EntityQueryTerms { get; set; } = [];
 }

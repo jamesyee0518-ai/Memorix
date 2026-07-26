@@ -139,6 +139,16 @@ function CitationCard({ citation }: { citation: Citation }) {
               {citation.section || "原文位置"}{citation.pageStart ? ` · 第 ${citation.pageStart}${citation.pageEnd && citation.pageEnd !== citation.pageStart ? `–${citation.pageEnd}` : ""} 页` : ""}
             </p>
           )}
+          {citation.entities && citation.entities.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {citation.entities.map((entity) => (
+                <span key={entity.entityId} className="rounded-full border bg-background px-2 py-0.5 text-[10px] text-muted-foreground" title={`原文提及：${entity.originalMention}`}>
+                  {entity.preferredName}
+                  {entity.originalMention !== entity.preferredName ? ` · ${entity.originalMention}` : ""}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
             {citation.displaySnippet || citation.snippet}
           </p>
