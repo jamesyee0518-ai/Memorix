@@ -17,10 +17,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macOS x64
+          - name: macOS ARM64
             os: macos-14
-            rid: osx-x64
-            artifact: memorix-macos-x64
+            rid: osx-arm64
+            artifact: memorix-macos-arm64
             bundle_paths: |
               desktop/src-tauri/target/release/bundle/dmg/*.dmg
               desktop/src-tauri/target/release/bundle/macos/*.app
