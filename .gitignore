@@ -43,5 +43,7 @@ logs/
 .codebase-memory/
 research-memory-engine/.next/
 research-memory-engine/.npm-cache/
+preview/.next/
+preview/.npm-cache/
 desktop/src-tauri/tauri.release.conf.json
 downloads/*.zip
