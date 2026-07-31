@@ -10,5 +10,11 @@
       "http://127.0.0.1:*/*"
     ]
   },
-  "permissions": ["dialog:allow-open"]
+  "permissions": [
+    "dialog:allow-open",
+    "process:allow-restart",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install"
+  ]
 }

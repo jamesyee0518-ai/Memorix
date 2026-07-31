@@ -84,5 +84,25 @@ public interface IAppDbContext
     DbSet<WorkspaceBinding> WorkspaceBindings { get; }
     DbSet<SyncInboxStaging> SyncInboxStaging { get; }
 
+    // AI billing control-plane entities
+    DbSet<BillingAccount> BillingAccounts { get; }
+    DbSet<WorkspaceBillingBinding> WorkspaceBillingBindings { get; }
+    DbSet<AccountEntitlement> AccountEntitlements { get; }
+    DbSet<PricePlanVersion> PricePlanVersions { get; }
+    DbSet<PriceRule> PriceRules { get; }
+    DbSet<QuotaBucket> QuotaBuckets { get; }
+    DbSet<BalanceReservation> BalanceReservations { get; }
+    DbSet<AiTask> AiTasks { get; }
+    DbSet<AiRequestAttempt> AiRequestAttempts { get; }
+    DbSet<UsageEvent> UsageEvents { get; }
+    DbSet<BillingCharge> BillingCharges { get; }
+    DbSet<ProviderCost> ProviderCosts { get; }
+    DbSet<AccountLedger> AccountLedger { get; }
+    DbSet<RechargeProduct> RechargeProducts { get; }
+    DbSet<RechargeOrder> RechargeOrders { get; }
+    DbSet<PaymentAttempt> PaymentAttempts { get; }
+    DbSet<PaymentNotification> PaymentNotifications { get; }
+    DbSet<PaymentRefund> PaymentRefunds { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

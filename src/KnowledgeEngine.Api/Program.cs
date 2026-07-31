@@ -150,6 +150,11 @@ using (var scope = app.Services.CreateScope())
         db.EnsureMultilingualSetupAsync().GetAwaiter().GetResult();
         db.EnsureEntityResolutionSetupAsync().GetAwaiter().GetResult();
         db.EnsureIdentityAndBindingSetupAsync().GetAwaiter().GetResult();
+        db.EnsureBillingSetupAsync().GetAwaiter().GetResult();
+        scope.ServiceProvider.GetRequiredService<IAiBillingService>()
+            .EnsureDefaultsAsync().GetAwaiter().GetResult();
+        scope.ServiceProvider.GetRequiredService<IPaymentService>()
+            .EnsureDefaultsAsync().GetAwaiter().GetResult();
         scope.ServiceProvider.GetRequiredService<IChineseFullTextIndexService>()
             .EnsureCreatedAsync().GetAwaiter().GetResult();
         if (db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)

@@ -27,7 +27,14 @@ impl Drop for Sidecars {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![open_directory, open_external_url])
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            open_directory,
+            open_external_url,
+            prepare_update_install,
+            resume_after_update_failure
+        ])
         .manage(Mutex::new(Sidecars {
             api: None,
             web: None,
@@ -94,6 +101,74 @@ fn stop_child(child: &mut Option<Child>) {
         let _ = process.kill();
         let _ = process.wait();
     }
+}
+
+#[tauri::command]
+fn prepare_update_install(app: tauri::AppHandle) -> Result<String, String> {
+    stop_sidecars(&app);
+    backup_desktop_database(&app)
+}
+
+#[tauri::command]
+fn resume_after_update_failure(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(debug_assertions))]
+    {
+        let handle = app.clone();
+        std::thread::spawn(move || match start_production_sidecars(&handle) {
+            Ok(web_port) => {
+                if let Some(window) = handle.get_webview_window("main") {
+                    if let Ok(url) = format!("http://127.0.0.1:{web_port}").parse() {
+                        let _ = window.navigate(url);
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let message = serde_json::to_string(&error.to_string())
+                        .unwrap_or_else(|_| "\"Unknown restart error\"".to_string());
+                    let _ = window.eval(format!("window.showStartupError?.({message})"));
+                }
+            }
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    let _ = app;
+
+    Ok(())
+}
+
+fn backup_desktop_database(app: &tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法读取应用数据目录: {error}"))?;
+    let database = app_data_dir.join("memorix.db");
+    if !database.is_file() {
+        return Ok(String::new());
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| format!("无法生成备份时间: {error}"))?
+        .as_secs();
+    let backup_dir = app_data_dir
+        .join("backups")
+        .join("pre-update")
+        .join(timestamp.to_string());
+    std::fs::create_dir_all(&backup_dir)
+        .map_err(|error| format!("无法创建升级备份目录: {error}"))?;
+
+    for suffix in ["", "-wal", "-shm"] {
+        let source = app_data_dir.join(format!("memorix.db{suffix}"));
+        if source.is_file() {
+            let destination = backup_dir.join(format!("memorix.db{suffix}"));
+            std::fs::copy(&source, &destination)
+                .map_err(|error| format!("无法备份 {}: {error}", source.display()))?;
+        }
+    }
+
+    Ok(backup_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]

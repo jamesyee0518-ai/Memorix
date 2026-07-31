@@ -76,6 +76,15 @@ import type {
   ReleaseNote,
   ReleaseNoteInput,
   UsageResponse,
+  BillingSummaryResponse,
+  BillingOverviewResponse,
+  BillingUsageResponse,
+  BillingBillsResponse,
+  BillingPricingResponse,
+  RechargeCatalogResponse,
+  CreateRechargeOrderInput,
+  RechargeOrderResponse,
+  RechargeOrderListResponse,
   Workspace,
   CreateWorkspaceInput,
   InitLocalWorkspaceInput,
@@ -103,6 +112,7 @@ import type {
   LocalConfig,
   RuntimeHealth,
   WorkspaceRuntimeHealth,
+  UpdateSafetyStatus,
   LocalModelDetection,
   UpdateModelSettingsInput,
   ModelTestResult,
@@ -1307,6 +1317,103 @@ export const usageApi = {
   },
 };
 
+export const billingApi = {
+  summary(workspaceId: string): Promise<BillingSummaryResponse> {
+    return request<BillingSummaryResponse>({
+      method: "GET",
+      url: "/billing/summary",
+      params: { workspaceId },
+    });
+  },
+
+  overview(workspaceId: string): Promise<BillingOverviewResponse> {
+    return request<BillingOverviewResponse>({
+      method: "GET",
+      url: "/billing/overview",
+      params: { workspaceId },
+    });
+  },
+
+  usage(workspaceId: string, from?: string, to?: string): Promise<BillingUsageResponse> {
+    return request<BillingUsageResponse>({
+      method: "GET",
+      url: "/billing/usage",
+      params: { workspaceId, from, to },
+    });
+  },
+
+  bills(workspaceId: string, from?: string, to?: string): Promise<BillingBillsResponse> {
+    return request<BillingBillsResponse>({
+      method: "GET",
+      url: "/billing/bills",
+      params: { workspaceId, from, to },
+    });
+  },
+
+  pricing(workspaceId: string): Promise<BillingPricingResponse> {
+    return request<BillingPricingResponse>({
+      method: "GET",
+      url: "/billing/pricing",
+      params: { workspaceId },
+    });
+  },
+
+  rechargeCatalog(): Promise<RechargeCatalogResponse> {
+    return request<RechargeCatalogResponse>({
+      method: "GET",
+      url: "/billing/recharge/catalog",
+    });
+  },
+
+  createRechargeOrder(data: CreateRechargeOrderInput): Promise<RechargeOrderResponse> {
+    return request<RechargeOrderResponse>({
+      method: "POST",
+      url: "/billing/recharge/orders",
+      data,
+    });
+  },
+
+  rechargeOrders(workspaceId: string): Promise<RechargeOrderListResponse> {
+    return request<RechargeOrderListResponse>({
+      method: "GET",
+      url: "/billing/recharge/orders",
+      params: { workspaceId },
+    });
+  },
+
+  rechargeOrder(orderId: string, workspaceId: string): Promise<RechargeOrderResponse> {
+    return request<RechargeOrderResponse>({
+      method: "GET",
+      url: `/billing/recharge/orders/${orderId}`,
+      params: { workspaceId },
+    });
+  },
+
+  refreshRechargeOrder(orderId: string, workspaceId: string): Promise<RechargeOrderResponse> {
+    return request<RechargeOrderResponse>({
+      method: "POST",
+      url: `/billing/recharge/orders/${orderId}/refresh`,
+      params: { workspaceId },
+    });
+  },
+
+  closeRechargeOrder(orderId: string, workspaceId: string): Promise<RechargeOrderResponse> {
+    return request<RechargeOrderResponse>({
+      method: "POST",
+      url: `/billing/recharge/orders/${orderId}/close`,
+      params: { workspaceId },
+    });
+  },
+
+  confirmFakeRecharge(orderId: string, workspaceId: string): Promise<RechargeOrderResponse> {
+    return request<RechargeOrderResponse>({
+      method: "POST",
+      url: `/billing/recharge/orders/${orderId}/fake-confirm`,
+      params: { workspaceId },
+    });
+  },
+};
+
 // ===== 工作区 API =====
 
 export const workspaceApi = {
@@ -1811,6 +1918,12 @@ export const runtimeApi = {
     return request<LocalModelDetection>({
       method: "GET",
       url: "/runtime/local-models",
+    });
+  },
+  updateSafety(): Promise<UpdateSafetyStatus> {
+    return request<UpdateSafetyStatus>({
+      method: "GET",
+      url: "/runtime/update-safety",
     });
   },
 };

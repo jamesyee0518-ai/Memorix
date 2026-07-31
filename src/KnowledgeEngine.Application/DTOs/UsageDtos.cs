@@ -6,6 +6,12 @@ namespace KnowledgeEngine.Application.DTOs;
 
 public class UsageResponse
 {
+    [JsonPropertyName("is_financial_truth")]
+    public bool IsFinancialTruth { get; set; }
+
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = "legacy_aggregate";
+
     [JsonPropertyName("today")]
     public UsageDailyItem Today { get; set; } = new();
 

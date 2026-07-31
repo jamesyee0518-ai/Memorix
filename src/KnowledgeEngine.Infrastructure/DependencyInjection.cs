@@ -9,6 +9,7 @@ using KnowledgeEngine.Infrastructure.Mcp;
 using KnowledgeEngine.Infrastructure.Notifications;
 using KnowledgeEngine.Infrastructure.Processing;
 using KnowledgeEngine.Infrastructure.Processing.Processors;
+using KnowledgeEngine.Infrastructure.Payments;
 using KnowledgeEngine.Infrastructure.Reports;
 using KnowledgeEngine.Infrastructure.Runtime;
 using KnowledgeEngine.Infrastructure.Search;
@@ -32,6 +33,8 @@ public static class DependencyInjection
         services.Configure<EmbeddingSettings>(configuration.GetSection("Embedding"));
         services.Configure<EntityResolutionSettings>(configuration.GetSection("EntityResolution"));
         services.Configure<LocalFileStorageSettings>(configuration.GetSection("LocalFileStorage"));
+        services.Configure<BillingSettings>(configuration.GetSection("Billing"));
+        services.Configure<PaymentSettings>(configuration.GetSection("Payment"));
 
         // DbContext
         var databaseProvider = configuration["DatabaseProvider"] ?? "postgres";
@@ -209,6 +212,18 @@ public static class DependencyInjection
 
         // Usage Service
         services.AddScoped<IUsageService, UsageService>();
+        services.AddScoped<IAiBillingService, AiBillingService>();
+        services.AddScoped<IBillingPortalService, BillingPortalService>();
+        services.AddScoped<IBillingMaintenanceService, BillingMaintenanceService>();
+        services.AddHostedService<BillingMaintenanceWorker>();
+        services.AddHttpClient<WeChatPayProvider>();
+        services.AddHttpClient<AlipayProvider>();
+        services.AddSingleton<FakePaymentProvider>();
+        services.AddTransient<IPaymentProvider>(sp => sp.GetRequiredService<WeChatPayProvider>());
+        services.AddTransient<IPaymentProvider>(sp => sp.GetRequiredService<AlipayProvider>());
+        services.AddSingleton<IPaymentProvider>(sp => sp.GetRequiredService<FakePaymentProvider>());
+        services.AddScoped<IPaymentService, PaymentService>();
+        services.AddHostedService<PaymentRecoveryWorker>();
 
         // ===== Agent Services =====
         services.AddScoped<IAgentToolService, AgentToolService>();

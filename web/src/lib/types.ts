@@ -1111,6 +1111,8 @@ export interface UsageTrendItem {
 }
 
 export interface UsageResponse {
+  is_financial_truth: false;
+  source: "legacy_aggregate";
   today: UsageDaily;
   last7Days: UsageTrendItem[];
   totals: {
@@ -1121,6 +1123,183 @@ export interface UsageResponse {
     apiCallCount: number;
     agentCallCount: number;
   };
+}
+
+export interface BillingSummaryResponse {
+  billingAccountId: string;
+  workspaceId: string;
+  currency: string;
+  grantedCredits: number;
+  consumedCredits: number;
+  reservedCredits: number;
+  availableCredits: number;
+  actualAmount: number;
+  isFinancialTruth: boolean;
+  asOf: string;
+}
+
+export interface BillingOverviewResponse {
+  billingAccountId: string;
+  workspaceId: string;
+  accountName: string;
+  currency: string;
+  grantedCredits: number;
+  consumedCredits: number;
+  reservedCredits: number;
+  availableCredits: number;
+  planAvailableCredits: number;
+  topUpAvailableCredits: number;
+  promotionAvailableCredits: number;
+  monthCredits: number;
+  monthAmount: number;
+  pendingCredits: number;
+  monthRequests: number;
+  monthTokens: number;
+  isFinancialTruth: boolean;
+  paymentEnabled: boolean;
+  asOf: string;
+}
+
+export interface BillingUsagePointResponse {
+  date: string;
+  credits: number;
+  amount: number;
+  requests: number;
+  tokens: number;
+}
+
+export interface BillingUsageItemResponse {
+  jobId: string;
+  createdAt: string;
+  jobType: string;
+  model?: string | null;
+  executionMode: string;
+  billingMode: string;
+  status: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  credits: number;
+  amount: number;
+  currency: string;
+}
+
+export interface BillingUsageResponse {
+  billingAccountId: string;
+  workspaceId: string;
+  from: string;
+  to: string;
+  totalCredits: number;
+  totalAmount: number;
+  totalRequests: number;
+  totalTokens: number;
+  currency: string;
+  isFinancialTruth: boolean;
+  asOf: string;
+  trend: BillingUsagePointResponse[];
+  items: BillingUsageItemResponse[];
+}
+
+export interface BillingBillItemResponse {
+  id: string;
+  occurredAt: string;
+  type: "CHARGE" | "RECHARGE" | string;
+  title: string;
+  reference: string;
+  credits: number;
+  amountMinor?: number | null;
+  currency: string;
+  status: string;
+}
+
+export interface BillingBillsResponse {
+  billingAccountId: string;
+  workspaceId: string;
+  currency: string;
+  isFinancialTruth: boolean;
+  asOf: string;
+  items: BillingBillItemResponse[];
+}
+
+export interface BillingPriceRuleResponse {
+  meterType: string;
+  providerId?: string | null;
+  modelId?: string | null;
+  unit: string;
+  unitSize: number;
+  creditRate: number;
+  saleUnitPrice: number;
+  currency: string;
+}
+
+export interface BillingPricingResponse {
+  pricePlanVersionId?: string | null;
+  planCode: string;
+  version: number;
+  currency: string;
+  isShadowPricing: boolean;
+  effectiveFrom?: string | null;
+  rules: BillingPriceRuleResponse[];
+}
+
+export interface PaymentMethodResponse {
+  channel: string;
+  scene: string;
+  displayName: string;
+  enabled: boolean;
+}
+
+export interface RechargeProductResponse {
+  id: string;
+  code: string;
+  displayName: string;
+  description: string;
+  currency: string;
+  amountMinor: number;
+  paidCredits: number;
+  bonusCredits: number;
+  bonusExpiresInDays?: number | null;
+}
+
+export interface RechargeCatalogResponse {
+  paymentEnabled: boolean;
+  methods: PaymentMethodResponse[];
+  products: RechargeProductResponse[];
+}
+
+export interface CreateRechargeOrderInput {
+  workspaceId: string;
+  rechargeProductId: string;
+  paymentChannel: string;
+  paymentScene: string;
+  idempotencyKey: string;
+}
+
+export interface RechargeOrderResponse {
+  id: string;
+  orderNo: string;
+  billingAccountId: string;
+  workspaceId: string;
+  rechargeProductId: string;
+  productName: string;
+  channel: string;
+  channelScene: string;
+  currency: string;
+  amountMinor: number;
+  paidCredits: number;
+  bonusCredits: number;
+  status: string;
+  paymentPayloadType?: string | null;
+  paymentPayload?: string | null;
+  providerTradeNo?: string | null;
+  expiresAt: string;
+  paidAt?: string | null;
+  fulfilledAt?: string | null;
+  createdAt: string;
+}
+
+export interface RechargeOrderListResponse {
+  items: RechargeOrderResponse[];
 }
 
 // ===== 工作区 (Workspace) =====
@@ -1728,6 +1907,13 @@ export interface MultilingualBatchJob {
   retryCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UpdateSafetyStatus {
+  safeToInstall: boolean;
+  activeJobs: number;
+  breakdown: Record<string, number>;
+  message: string;
 }
 
 // ===== Chunk Embedding =====

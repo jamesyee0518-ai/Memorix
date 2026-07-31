@@ -2,6 +2,7 @@ using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using KnowledgeEngine.Application.Security;
 
 namespace KnowledgeEngine.Api.Controllers;
@@ -17,15 +18,67 @@ public class RuntimeController : BaseController
     private readonly IRuntimeHealthService _healthService;
     private readonly IWorkspaceService _workspaceService;
     private readonly ICurrentUserContext _currentUser;
+    private readonly IAppDbContext _db;
 
     public RuntimeController(
         IRuntimeHealthService healthService,
         IWorkspaceService workspaceService,
-        ICurrentUserContext currentUser)
+        ICurrentUserContext currentUser,
+        IAppDbContext db)
     {
         _healthService = healthService;
         _workspaceService = workspaceService;
         _currentUser = currentUser;
+        _db = db;
+    }
+
+    /// <summary>
+    /// Reports whether the local runtime is at a safe point for replacing the desktop application.
+    /// Pending and paused work can survive a restart; actively running work must finish first.
+    /// </summary>
+    [HttpGet("update-safety")]
+    [Authorize]
+    public async Task<IActionResult> CheckUpdateSafety(CancellationToken ct)
+    {
+        if (_currentUser.UserId is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var workspace = await _workspaceService.GetCurrentWorkspaceAsync(userId, ct);
+        var activeStatuses = new[] { "running", "processing" };
+        var breakdown = new Dictionary<string, int>
+        {
+            ["资料处理"] = await _db.IngestJobs.AsNoTracking()
+                .CountAsync(x => x.UserId == userId && activeStatuses.Contains(x.Status), ct),
+            ["AI 处理"] = await _db.AiJobs.AsNoTracking()
+                .CountAsync(x => x.UserId == userId && activeStatuses.Contains(x.Status), ct),
+            ["多语言批处理"] = await _db.MultilingualBatchJobs.AsNoTracking()
+                .CountAsync(x => x.UserId == userId && activeStatuses.Contains(x.Status), ct),
+            ["实体治理"] = await _db.EntityGovernanceTasks.AsNoTracking()
+                .CountAsync(x => x.UserId == userId && activeStatuses.Contains(x.Status), ct),
+            ["报告生成"] = await _db.ReportJobs.AsNoTracking()
+                .CountAsync(x => x.UserId == userId && activeStatuses.Contains(x.Status), ct),
+            ["导出"] = await _db.ExportJobs.AsNoTracking()
+                .CountAsync(x => x.UserId == userId && activeStatuses.Contains(x.Status), ct),
+        };
+
+        if (workspace != null)
+        {
+            breakdown["收件箱导入"] = await _db.ImportJobs.AsNoTracking()
+                .CountAsync(x => x.WorkspaceId == workspace.Id && activeStatuses.Contains(x.Status), ct);
+        }
+
+        var activeJobs = breakdown.Values.Sum();
+        return Ok(ApiResponse<object>.Ok(new
+        {
+            SafeToInstall = activeJobs == 0,
+            ActiveJobs = activeJobs,
+            Breakdown = breakdown.Where(x => x.Value > 0).ToDictionary(),
+            Message = activeJobs == 0
+                ? "当前可以安全安装更新。"
+                : $"仍有 {activeJobs} 个任务正在运行，请等待任务完成后再安装。"
+        }, GetTraceId()));
     }
 
     /// <summary>

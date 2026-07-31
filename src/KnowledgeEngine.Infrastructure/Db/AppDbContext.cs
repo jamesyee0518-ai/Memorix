@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace KnowledgeEngine.Infrastructure.Db;
 
-public class AppDbContext : DbContext, IAppDbContext
+public partial class AppDbContext : DbContext, IAppDbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -90,6 +90,26 @@ public class AppDbContext : DbContext, IAppDbContext
     public DbSet<WorkspaceBinding> WorkspaceBindings => Set<WorkspaceBinding>();
     public DbSet<SyncInboxStaging> SyncInboxStaging => Set<SyncInboxStaging>();
 
+    // AI billing control-plane entities
+    public DbSet<BillingAccount> BillingAccounts => Set<BillingAccount>();
+    public DbSet<WorkspaceBillingBinding> WorkspaceBillingBindings => Set<WorkspaceBillingBinding>();
+    public DbSet<AccountEntitlement> AccountEntitlements => Set<AccountEntitlement>();
+    public DbSet<PricePlanVersion> PricePlanVersions => Set<PricePlanVersion>();
+    public DbSet<PriceRule> PriceRules => Set<PriceRule>();
+    public DbSet<QuotaBucket> QuotaBuckets => Set<QuotaBucket>();
+    public DbSet<BalanceReservation> BalanceReservations => Set<BalanceReservation>();
+    public DbSet<AiTask> AiTasks => Set<AiTask>();
+    public DbSet<AiRequestAttempt> AiRequestAttempts => Set<AiRequestAttempt>();
+    public DbSet<UsageEvent> UsageEvents => Set<UsageEvent>();
+    public DbSet<BillingCharge> BillingCharges => Set<BillingCharge>();
+    public DbSet<ProviderCost> ProviderCosts => Set<ProviderCost>();
+    public DbSet<AccountLedger> AccountLedger => Set<AccountLedger>();
+    public DbSet<RechargeProduct> RechargeProducts => Set<RechargeProduct>();
+    public DbSet<RechargeOrder> RechargeOrders => Set<RechargeOrder>();
+    public DbSet<PaymentAttempt> PaymentAttempts => Set<PaymentAttempt>();
+    public DbSet<PaymentNotification> PaymentNotifications => Set<PaymentNotification>();
+    public DbSet<PaymentRefund> PaymentRefunds => Set<PaymentRefund>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -169,6 +189,7 @@ public class AppDbContext : DbContext, IAppDbContext
         ConfigureMultilingualBatchJob(modelBuilder);
         ConfigureIdentityAndBindingFoundation(modelBuilder);
         ConfigureSyncInboxStaging(modelBuilder);
+        ConfigureBilling(modelBuilder);
     }
 
     /// <summary>
@@ -1891,18 +1912,36 @@ public class AppDbContext : DbContext, IAppDbContext
         e.HasKey(j => j.Id);
         e.Property(j => j.Id).HasColumnType("uuid");
         e.Property(j => j.UserId).HasColumnType("uuid");
+        e.Property(j => j.ClientJobId).HasMaxLength(160);
+        e.Property(j => j.WorkspaceId).HasColumnType("uuid");
+        e.Property(j => j.BillingAccountId).HasColumnType("uuid");
+        e.Property(j => j.PricePlanVersionId).HasColumnType("uuid");
+        e.Property(j => j.DeviceId).HasColumnType("uuid");
         e.Property(j => j.JobType).IsRequired().HasMaxLength(50);
         e.Property(j => j.TargetType).IsRequired().HasMaxLength(50);
         e.Property(j => j.TargetId).HasColumnType("uuid");
         e.Property(j => j.Status).IsRequired().HasMaxLength(50);
+        e.Property(j => j.ExecutionMode).IsRequired().HasMaxLength(30);
+        e.Property(j => j.BillingMode).IsRequired().HasMaxLength(40);
         e.Property(j => j.Model).HasMaxLength(100);
         e.Property(j => j.PromptVersion).HasMaxLength(50);
+        e.Property(j => j.DataPolicy).HasMaxLength(50);
+        e.Property(j => j.ModelPolicy).HasMaxLength(50);
+        e.Property(j => j.CostEstimate).HasPrecision(20, 8);
+        e.Property(j => j.EstimatedCredits).HasPrecision(20, 6);
+        e.Property(j => j.ActualCredits).HasPrecision(20, 6);
+        e.Property(j => j.EstimatedAmount).HasPrecision(20, 8);
+        e.Property(j => j.ActualAmount).HasPrecision(20, 8);
+        e.Property(j => j.BudgetLimit).HasPrecision(20, 8);
+        e.Property(j => j.Currency).IsRequired().HasMaxLength(3);
         e.Property(j => j.ErrorMessage).HasMaxLength(2000);
         e.Property(j => j.CreatedAt).IsRequired();
 
         e.HasIndex(j => j.UserId);
         e.HasIndex(j => j.Status);
         e.HasIndex(j => new { j.TargetType, j.TargetId });
+        e.HasIndex(j => new { j.WorkspaceId, j.ClientJobId }).IsUnique();
+        e.HasIndex(j => new { j.BillingAccountId, j.CreatedAt });
     }
 
     // ===== Phase 3 Entity Configurations =====

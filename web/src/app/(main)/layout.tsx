@@ -17,7 +17,6 @@ import {
   MessageCircle,
   ClipboardList,
   KeyRound,
-  BarChart3,
   BookOpen,
   MessageSquare,
   Layers,
@@ -34,6 +33,7 @@ import {
   ChevronsUpDown,
   Languages,
   ShieldCheck,
+  WalletCards,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
@@ -66,6 +66,7 @@ const navItems = [
   { href: "/entities", label: "实体", icon: Boxes },
   { href: "/tags", label: "标签", icon: Tag },
   { href: "/operations", label: "运营中心", icon: ShieldCheck, operatorOnly: true },
+  { href: "/billing", label: "计费中心", icon: WalletCards },
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
@@ -76,7 +77,6 @@ const settingsSubItems = [
   { href: "/settings/runtime", label: "运行时状态", icon: Activity, adminOnly: true },
   { href: "/settings/api-keys", label: "API Key", icon: KeyRound },
   { href: "/settings/agents", label: "Agent 接入", icon: Bot },
-  { href: "/settings/usage", label: "使用量", icon: BarChart3 },
   { href: "/settings/feedback", label: "我的反馈", icon: MessageSquare },
   { href: "/settings/api-docs", label: "API 文档", icon: BookOpen },
   { href: "/settings/inbox", label: "收件箱", icon: Inbox },
