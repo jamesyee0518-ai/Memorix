@@ -42,7 +42,59 @@ services:
       timeout: 5s
       retries: 3
 
+  funasr:
+    image: registry.cn-hangzhou.aliyuncs.com/funasr_repo/funasr
+    container_name: ke-funasr
+    profiles: ["audio"]
+    ports:
+      - "10095:10095"
+    environment:
+      MODE: offline
+    volumes:
+      - funasrdata:/workspace/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:10095/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  fish-speech:
+    image: fishaudio/fish-speech:latest
+    container_name: ke-fish-speech
+    profiles: ["audio"]
+    ports:
+      - "8080:8080"
+    environment:
+      MODE: api
+      DEVICE: cuda
+    volumes:
+      - fishspeechdata:/app/models
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: ke-piper
+    profiles: ["audio"]
+    ports:
+      - "10200:10200"
+    environment:
+      URSULA_VOICE: en_US-lessac-medium
+    volumes:
+      - piperdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:10200/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 volumes:
   pgdata:
   redisdata:
   miniodata:
+  funasrdata:
+  fishspeechdata:
+  piperdata:

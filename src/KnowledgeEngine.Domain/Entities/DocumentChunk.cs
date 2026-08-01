@@ -52,4 +52,7 @@ public class DocumentChunk
     public int? PageStart { get; set; }
     public int? PageEnd { get; set; }
     public string IndexStatus { get; set; } = "pending";
+
+    // Phase 6: Audio capability field
+    public string? AudioSegmentUuid { get; set; }
 }

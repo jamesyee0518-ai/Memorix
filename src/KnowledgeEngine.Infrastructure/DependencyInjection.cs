@@ -289,6 +289,128 @@ public static class DependencyInjection
         // Topic suggestor (keyword-based topic and title suggestions)
         services.AddScoped<TopicSuggestor>();
 
+        // ===== Audio Capability Services (Phase P0) =====
+
+        // Settings
+        services.Configure<AudioSettings>(configuration.GetSection("Audio"));
+
+        // HTTP clients for audio providers
+        services.AddHttpClient("FunAsr");
+        services.AddHttpClient("Piper");
+        services.AddHttpClient("FishSpeech");
+        services.AddHttpClient("Zhipu");
+        services.AddHttpClient("CloudTts");
+        services.AddHttpClient("FasterWhisper");
+
+        // ASR Providers (singleton-safe: depend only on IConfiguration, IHttpClientFactory, ILogger)
+        services.AddSingleton<IAsrProvider, Audio.Providers.WhisperCppAsrProvider>();
+        services.AddSingleton<IAsrProvider, Audio.Providers.FunAsrAsrProvider>();
+        services.AddSingleton<IAsrProvider, Audio.Providers.FunAsrVadProvider>();
+        services.AddSingleton<IAsrProvider, Audio.Providers.FunAsrPunctuationProvider>();
+        // ZhipuGlmAsrProvider depends on IHttpClientFactory, ICredentialManager (singleton),
+        // IOptions<AudioSettings>, and ILogger — all singleton-safe.
+        services.AddSingleton<IAsrProvider, Audio.Providers.ZhipuGlmAsrProvider>();
+        // FasterWhisperAsrProvider depends on IHttpClientFactory, IOptions<AudioSettings>, and
+        // ILogger — all singleton-safe.
+        services.AddSingleton<IAsrProvider, Audio.Providers.FasterWhisperAsrProvider>();
+        // LanNodeProvider depends on ILanNodeDiscovery (scoped), so it must be scoped too.
+        services.AddScoped<IAsrProvider, Audio.Providers.LanNodeProvider>();
+
+        // TTS Providers (singleton-safe: depend only on IConfiguration, IHttpClientFactory, ILogger)
+        services.AddSingleton<ITtsProvider, Audio.Providers.FishSpeechTtsProvider>();
+        services.AddSingleton<ITtsProvider, Audio.Providers.PiperTtsProvider>();
+        services.AddSingleton<ITtsProvider, Audio.Providers.SystemTtsProvider>();
+        // CloudTtsProvider depends on IHttpClientFactory, ICredentialManager (singleton),
+        // IOptions<AudioSettings>, and ILogger — all singleton-safe.
+        services.AddSingleton<ITtsProvider, Audio.Providers.CloudTtsProvider>();
+
+        // Provider Registry — scoped to support scoped providers (e.g. LanNodeProvider)
+        services.AddScoped<Audio.ProviderRegistry>(sp =>
+        {
+            var registry = new Audio.ProviderRegistry();
+            var asrProviders = sp.GetServices<IAsrProvider>();
+            foreach (var provider in asrProviders)
+            {
+                registry.RegisterAsync(provider, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            var ttsProviders = sp.GetServices<ITtsProvider>();
+            foreach (var provider in ttsProviders)
+            {
+                registry.RegisterAsync(provider, CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            return registry;
+        });
+        services.AddScoped<IProviderRegistry>(sp => sp.GetRequiredService<Audio.ProviderRegistry>());
+
+        // Audio infrastructure services
+        services.AddSingleton<ICredentialManager, Audio.CredentialManager>();
+        services.AddSingleton<IAudioCacheService, Audio.AudioCacheService>();
+        services.AddSingleton<IVadService, Audio.VadService>();
+        services.AddScoped<IMediaPreparationService, Audio.MediaPreparationService>();
+        services.AddScoped<IAudioPolicyRouter, Audio.AudioPolicyRouter>();
+        services.AddScoped<IAudioCapabilityOrchestrator, Audio.AudioCapabilityOrchestrator>();
+        services.AddScoped<Audio.ProviderUsageMeteringService>();
+        services.AddScoped<IPostAsrCorrectionService, Audio.PostAsrCorrectionService>();
+
+        // P1: Device Capability Detection
+        services.AddScoped<IDeviceCapabilityDetector, Audio.DeviceCapabilityDetector>();
+
+        // P1: Cost Estimator
+        services.AddScoped<Audio.CostEstimator>();
+
+        // P1: BYOK Failure Handler
+        services.AddScoped<Audio.ByokFailureHandler>();
+
+        // TTS infrastructure services
+        services.AddScoped<Audio.TtsSentenceSplitter>();
+        services.AddSingleton<Audio.TtsDegradationMonitor>();
+
+        // Model Registry and Benchmark services
+        services.AddScoped<IModelRegistryService, Audio.ModelRegistryService>();
+        services.AddScoped<IBenchmarkService, Audio.BenchmarkService>();
+
+        // Startup seeders for default prompt registry and benchmark data
+        services.AddHostedService<Audio.PromptRegistrySeeder>();
+        services.AddHostedService<Audio.BenchmarkSeeder>();
+
+        // MediaProcessingService is registered in Application DI and will
+        // receive IAudioPolicyRouter via the unified DI container.
+
+        // Prompt Registry, A/B Testing, and Enterprise Policy services
+        services.AddScoped<IPromptRegistryService, Audio.PromptRegistryService>();
+        services.AddScoped<IPromptABTestService, Audio.PromptABTestService>();
+        services.AddScoped<IEnterprisePolicyService, Audio.EnterprisePolicyService>();
+
+        // ===== DAG Pipeline Engine & Nodes (Phase P3-A) =====
+        // The engine is stateless aside from logging/timeout config; register as
+        // scoped so it shares the request-scoped DbContext with the nodes.
+        services.AddScoped<Pipeline.DagPipelineEngine>();
+
+        // Pipeline nodes are registered as IPipelineNode so they can be resolved
+        // as a collection (IEnumerable<IPipelineNode>) and assembled into a graph.
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.AsrNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.CorrectionNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.SummaryNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.EntityNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.EmbeddingNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.TodoNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.TranslationNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.DiarizationNode>();
+        services.AddScoped<IPipelineNode, Pipeline.Nodes.KnowledgeGraphNode>();
+
+        // ===== Version Merge Service (three-way merge) =====
+        services.AddScoped<IVersionMergeService, Audio.VersionMergeService>();
+
+        // ===== P3-B: LAN Node Discovery & Multi-Cloud Failover =====
+        services.AddHttpClient("LanNode");
+        services.AddScoped<ILanNodeDiscovery, Audio.LanNodeDiscovery>();
+        services.AddScoped<Audio.MultiCloudFailover>();
+
+        // ===== P3-B: Provider Marketplace =====
+        services.AddScoped<IProviderMarketplaceService, Audio.ProviderMarketplaceService>();
+
         return services;
     }
 }
