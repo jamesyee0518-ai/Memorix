@@ -45,3 +45,7 @@ research-memory-engine/.next/
 research-memory-engine/.npm-cache/
 desktop/src-tauri/tauri.release.conf.json
 downloads/*.zip
+
+# Documentation directories
+doc/
+docs/
