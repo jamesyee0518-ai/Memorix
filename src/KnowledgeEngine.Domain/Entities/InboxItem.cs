@@ -51,4 +51,7 @@ public class InboxItem
     public DateTime UpdatedAt { get; set; }
     public DateTime? ImportedAt { get; set; }
     public DateTime? ArchivedAt { get; set; }
+
+    // Phase 6: Audio capability field
+    public Guid? AudioAssetId { get; set; }
 }

@@ -91,4 +91,12 @@ public class Document
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    // Phase 6: Audio capability fields
+    public Guid? AudioAssetId { get; set; }
+    public long? AudioDurationMs { get; set; }
+    public string? AudioLanguage { get; set; }
+    public int? AudioSegmentCount { get; set; }
+    public string? AsrStatus { get; set; }
+    public DateTime? AsrProcessedAt { get; set; }
 }

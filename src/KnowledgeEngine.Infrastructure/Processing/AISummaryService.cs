@@ -11,8 +11,11 @@ namespace KnowledgeEngine.Infrastructure.Processing;
 
 public class AISummaryService : IAISummaryService
 {
+    private const string PromptKey = "summary.default";
+
     private readonly RuntimeRouter _runtimeRouter;
     private readonly ISummaryPromptManager _promptManager;
+    private readonly IPromptRegistryService? _promptRegistry;
     private readonly LlmSettings _llmSettings;
     private readonly ILogger<AISummaryService> _logger;
 
@@ -36,19 +39,61 @@ public class AISummaryService : IAISummaryService
         RuntimeRouter runtimeRouter,
         ISummaryPromptManager promptManager,
         IOptions<LlmSettings> llmSettings,
-        ILogger<AISummaryService> logger)
+        ILogger<AISummaryService> logger,
+        IPromptRegistryService? promptRegistry = null)
     {
         _runtimeRouter = runtimeRouter;
         _promptManager = promptManager;
+        _promptRegistry = promptRegistry;
         _llmSettings = llmSettings.Value;
         _logger = logger;
     }
 
     public async Task<AiSummaryResult> SummarizeAsync(string title, string contentText, string sourceType, CancellationToken ct = default)
     {
-        var systemPrompt = _promptManager.GetSystemPrompt();
-        var userPrompt = _promptManager.GetUserPrompt(title, contentText, sourceType);
-        var promptVersion = _promptManager.GetPromptVersion();
+        // Try to resolve the active prompt from the Prompt Registry first.
+        // Falls back to ISummaryPromptManager if no published prompt exists.
+        string systemPrompt;
+        string userPrompt;
+        string promptVersion;
+
+        if (_promptRegistry != null)
+        {
+            try
+            {
+                var registryPrompt = await _promptRegistry.GetActivePromptAsync(PromptKey, null, ct);
+                if (registryPrompt != null && !string.IsNullOrWhiteSpace(registryPrompt.SystemPrompt))
+                {
+                    systemPrompt = registryPrompt.SystemPrompt;
+                    userPrompt = ApplyUserPromptTemplate(registryPrompt.UserPromptTemplate, title, contentText, sourceType);
+                    promptVersion = registryPrompt.Version;
+
+                    _logger.LogInformation(
+                        "Using Prompt Registry prompt {PromptKey} v{Version} for summarization",
+                        PromptKey, promptVersion);
+                }
+                else
+                {
+                    systemPrompt = _promptManager.GetSystemPrompt();
+                    userPrompt = _promptManager.GetUserPrompt(title, contentText, sourceType);
+                    promptVersion = _promptManager.GetPromptVersion();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to resolve prompt from Prompt Registry; falling back to ISummaryPromptManager.");
+                systemPrompt = _promptManager.GetSystemPrompt();
+                userPrompt = _promptManager.GetUserPrompt(title, contentText, sourceType);
+                promptVersion = _promptManager.GetPromptVersion();
+            }
+        }
+        else
+        {
+            systemPrompt = _promptManager.GetSystemPrompt();
+            userPrompt = _promptManager.GetUserPrompt(title, contentText, sourceType);
+            promptVersion = _promptManager.GetPromptVersion();
+        }
+
         var model = _llmSettings.Model;
 
         _logger.LogInformation("Calling LLM for summarization: title={Title}, sourceType={SourceType}, model={Model}",
@@ -96,6 +141,24 @@ public class AISummaryService : IAISummaryService
         ValidateAnalysisResponse(finalAnalysis);
         _logger.LogWarning("Recovered LLM output via strict prompt on third attempt.");
         return BuildResult(finalAnalysis, llmResult, promptVersion);
+    }
+
+    /// <summary>
+    /// Applies the user prompt template from the Prompt Registry, replacing
+    /// placeholders {{title}}, {{content}}, {{sourceType}} with actual values.
+    /// Falls back to a simple concatenation if the template is empty.
+    /// </summary>
+    private static string ApplyUserPromptTemplate(string template, string title, string content, string sourceType)
+    {
+        if (string.IsNullOrWhiteSpace(template))
+        {
+            return $"Title: {title}\nSourceType: {sourceType}\n\n{content}";
+        }
+
+        return template
+            .Replace("{{title}}", title, StringComparison.OrdinalIgnoreCase)
+            .Replace("{{content}}", content, StringComparison.OrdinalIgnoreCase)
+            .Replace("{{sourceType}}", sourceType, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

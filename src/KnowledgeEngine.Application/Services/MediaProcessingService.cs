@@ -1,13 +1,17 @@
 using System.Diagnostics;
 using System.Text;
+using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
+using KnowledgeEngine.Domain.Enums;
 using Microsoft.Extensions.Logging;
 
 namespace KnowledgeEngine.Application.Services;
 
 /// <summary>
 /// Processes media inbox items into text and imports the result into the local knowledge base.
-/// Image OCR uses the local "tesseract" CLI. Audio transcription uses the local "whisper" CLI.
+/// Image OCR uses the local "tesseract" CLI. Audio transcription delegates to the audio
+/// capability provider system via <see cref="IAudioPolicyRouter"/>, which selects the best
+/// ASR provider based on privacy, execution mode, credential, and language constraints.
 /// </summary>
 public class MediaProcessingService
 {
@@ -16,6 +20,7 @@ public class MediaProcessingService
     private readonly IFileStorageFactory _fileStorageFactory;
     private readonly InboxImportService _inboxImportService;
     private readonly IPushNotificationService _pushNotifications;
+    private readonly IAudioPolicyRouter _policyRouter;
     private readonly ILogger<MediaProcessingService> _logger;
 
     public MediaProcessingService(
@@ -23,12 +28,14 @@ public class MediaProcessingService
         IFileStorageFactory fileStorageFactory,
         InboxImportService inboxImportService,
         IPushNotificationService pushNotifications,
+        IAudioPolicyRouter policyRouter,
         ILogger<MediaProcessingService> logger)
     {
         _repo = repo;
         _fileStorageFactory = fileStorageFactory;
         _inboxImportService = inboxImportService;
         _pushNotifications = pushNotifications;
+        _policyRouter = policyRouter;
         _logger = logger;
     }
 
@@ -169,37 +176,112 @@ public class MediaProcessingService
         }
     }
 
-    private static async Task<string> RunTranscriptionAsync(string audioPath, CancellationToken ct)
+    /// <summary>
+    /// Transcribes an audio file by delegating to the audio capability provider system.
+    /// Uses <see cref="IAudioPolicyRouter"/> to resolve the best ASR provider based on
+    /// privacy, execution mode, credential, and language constraints, then executes
+    /// transcription through the resolved provider.
+    /// Falls back gracefully if no providers are available.
+    /// </summary>
+    private async Task<string> RunTranscriptionAsync(string audioPath, CancellationToken ct)
     {
-        var model = Environment.GetEnvironmentVariable("MEMORIX_WHISPER_MODEL") ?? "base";
-        var tempDir = Path.Combine(Path.GetTempPath(), $"memorix-whisper-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+        var fileInfo = new FileInfo(audioPath);
 
+        var routingContext = new AsrRoutingContext
+        {
+            DataClassification = DataClassification.INTERNAL,
+            PreferredExecutionMode = null,
+            PreferredCredentialMode = null,
+            PreferredProviderId = null,
+            PreferredModelId = null,
+            Language = null,
+            EnableVad = false,
+            EnableSpeakerDiarization = false,
+            EnablePunctuation = true,
+            EnableHotwords = false,
+            EnableWordTimestamp = false,
+            FileSizeBytes = fileInfo.Exists ? fileInfo.Length : 0,
+            DurationMs = 0,
+            MimeType = GuessMimeType(audioPath),
+            FallbackPolicy = FallbackPolicies.LocalFallback,
+        };
+
+        IAsrProvider provider;
         try
         {
-            await RunCommandAsync("whisper",
-                $"\"{audioPath}\" --model {model} --output_format txt --output_dir \"{tempDir}\"",
-                ct);
-
-            var outputFile = Directory.GetFiles(tempDir, "*.txt").FirstOrDefault();
-            if (outputFile == null)
-            {
-                throw new InvalidOperationException("whisper 未生成转写文本文件。");
-            }
-
-            return (await File.ReadAllTextAsync(outputFile, ct)).Trim();
+            provider = await _policyRouter.ResolveAsrProviderAsync(routingContext, ct);
         }
-        finally
+        catch (InvalidOperationException ex)
         {
-            try
-            {
-                Directory.Delete(tempDir, recursive: true);
-            }
-            catch
-            {
-                // Best-effort cleanup only.
-            }
+            throw new InvalidOperationException(
+                "没有可用的 ASR Provider。请确认已安装 whisper 或启用 FunASR。" +
+                $"路由详情: {ex.Message}", ex);
         }
+
+        var descriptor = await provider.GetDescriptorAsync(ct);
+
+        _logger.LogInformation(
+            "MediaProcessingService: resolved ASR provider {ProviderId} (model: {ModelId}) for file {FilePath}",
+            descriptor.ProviderId, descriptor.ModelId, audioPath);
+
+        var request = new AsrTranscriptionRequest
+        {
+            AudioFilePath = audioPath,
+            MimeType = routingContext.MimeType,
+            FileSizeBytes = routingContext.FileSizeBytes,
+            DurationMs = 0,
+            Language = null,
+            EnableVad = false,
+            EnableSpeakerDiarization = false,
+            EnablePunctuation = true,
+            DataClassification = DataClassification.INTERNAL,
+            FallbackPolicy = FallbackPolicies.LocalFallback,
+        };
+
+        var result = await provider.TranscribeAsync(request, ct);
+
+        // Prefer the FullText field; fall back to concatenating segment text.
+        if (!string.IsNullOrWhiteSpace(result.FullText))
+        {
+            return result.FullText.Trim();
+        }
+
+        if (result.Segments is { Count: > 0 })
+        {
+            var sb = new StringBuilder();
+            foreach (var seg in result.Segments)
+            {
+                if (!string.IsNullOrWhiteSpace(seg.Text))
+                {
+                    if (sb.Length > 0)
+                        sb.Append(' ');
+                    sb.Append(seg.Text.Trim());
+                }
+            }
+            return sb.ToString();
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Guesses a MIME type from the file extension.
+    /// </summary>
+    private static string GuessMimeType(string filePath)
+    {
+        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        return ext switch
+        {
+            ".wav" => "audio/wav",
+            ".mp3" => "audio/mp3",
+            ".m4a" => "audio/m4a",
+            ".flac" => "audio/flac",
+            ".ogg" => "audio/ogg",
+            ".webm" => "audio/webm",
+            ".mp4" => "audio/mp4",
+            ".aac" => "audio/aac",
+            _ => "audio/wav",
+        };
     }
 
     private static async Task<(string Stdout, string Stderr)> RunCommandAsync(

@@ -9,6 +9,7 @@ using KnowledgeEngine.Infrastructure;
 using KnowledgeEngine.Infrastructure.Db;
 using KnowledgeEngine.Infrastructure.Mcp;
 using KnowledgeEngine.Infrastructure.Reports;
+using KnowledgeEngine.Api.Hubs;
 using KnowledgeEngine.Api.Middlewares;
 using KnowledgeEngine.Api.Security;
 using KnowledgeEngine.Api.Services;
@@ -57,6 +58,12 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 {
     options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     options.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.CamelCase;
+});
+
+// SignalR for streaming transcription
+builder.Services.AddSignalR(options =>
+{
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
 });
 
 // Swagger/OpenAPI
@@ -287,6 +294,10 @@ app.UseMiddleware<AgentAuthMiddleware>();
 
 // Controllers
 app.MapControllers();
+
+// SignalR Hubs
+app.MapHub<TranscriptionHub>("/hubs/transcription");
+app.MapHub<TtsHub>("/hubs/tts");
 
 // Health check
 app.MapGet("/health", async (AppDbContext db, CancellationToken ct) =>

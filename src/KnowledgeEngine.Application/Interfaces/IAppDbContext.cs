@@ -104,5 +104,28 @@ public interface IAppDbContext
     DbSet<PaymentNotification> PaymentNotifications { get; }
     DbSet<PaymentRefund> PaymentRefunds { get; }
 
+    // Phase 6 - Audio capability entities
+    DbSet<AudioAsset> AudioAssets { get; }
+    DbSet<TranscriptionJob> TranscriptionJobs { get; }
+    DbSet<TranscriptionSegment> TranscriptionSegments { get; }
+    DbSet<ProviderCredential> ProviderCredentials { get; }
+    DbSet<ProviderUsageRecord> ProviderUsageRecords { get; }
+    DbSet<VoiceCloneConsent> VoiceCloneConsents { get; }
+    DbSet<CorrectionDictionary> CorrectionDictionaries { get; }
+    DbSet<TranscriptionVersion> TranscriptionVersions { get; }
+
+    // Model Registry and Benchmark entities
+    DbSet<ModelRegistry> ModelRegistries { get; }
+    DbSet<BenchmarkResult> BenchmarkResults { get; }
+
+    // Prompt Registry, Enterprise Policy, and A/B Test entities
+    DbSet<PromptRegistry> PromptRegistries { get; }
+    DbSet<EnterprisePolicy> EnterprisePolicies { get; }
+    DbSet<PromptABTest> PromptABTests { get; }
+
+    // LAN node discovery & provider marketplace entities
+    DbSet<LanNode> LanNodes { get; }
+    DbSet<ProviderMarketplaceEntry> ProviderMarketplaceEntries { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

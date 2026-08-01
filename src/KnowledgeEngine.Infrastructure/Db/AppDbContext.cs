@@ -110,6 +110,29 @@ public partial class AppDbContext : DbContext, IAppDbContext
     public DbSet<PaymentNotification> PaymentNotifications => Set<PaymentNotification>();
     public DbSet<PaymentRefund> PaymentRefunds => Set<PaymentRefund>();
 
+    // Phase 6 - Audio capability entities
+    public DbSet<AudioAsset> AudioAssets => Set<AudioAsset>();
+    public DbSet<TranscriptionJob> TranscriptionJobs => Set<TranscriptionJob>();
+    public DbSet<TranscriptionSegment> TranscriptionSegments => Set<TranscriptionSegment>();
+    public DbSet<ProviderCredential> ProviderCredentials => Set<ProviderCredential>();
+    public DbSet<ProviderUsageRecord> ProviderUsageRecords => Set<ProviderUsageRecord>();
+    public DbSet<VoiceCloneConsent> VoiceCloneConsents => Set<VoiceCloneConsent>();
+    public DbSet<CorrectionDictionary> CorrectionDictionaries => Set<CorrectionDictionary>();
+    public DbSet<TranscriptionVersion> TranscriptionVersions => Set<TranscriptionVersion>();
+
+    // LAN node discovery & provider marketplace entities
+    public DbSet<LanNode> LanNodes => Set<LanNode>();
+    public DbSet<ProviderMarketplaceEntry> ProviderMarketplaceEntries => Set<ProviderMarketplaceEntry>();
+
+    // Prompt Registry, A/B Testing, and Enterprise Policy entities
+    public DbSet<PromptRegistry> PromptRegistries => Set<PromptRegistry>();
+    public DbSet<PromptABTest> PromptABTests => Set<PromptABTest>();
+    public DbSet<EnterprisePolicy> EnterprisePolicies => Set<EnterprisePolicy>();
+
+    // Model Registry and Benchmark entities
+    public DbSet<ModelRegistry> ModelRegistries => Set<ModelRegistry>();
+    public DbSet<BenchmarkResult> BenchmarkResults => Set<BenchmarkResult>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -190,6 +213,29 @@ public partial class AppDbContext : DbContext, IAppDbContext
         ConfigureIdentityAndBindingFoundation(modelBuilder);
         ConfigureSyncInboxStaging(modelBuilder);
         ConfigureBilling(modelBuilder);
+
+        // Phase 6 - Audio capability configurations
+        ConfigureAudioAsset(modelBuilder);
+        ConfigureTranscriptionJob(modelBuilder);
+        ConfigureTranscriptionSegment(modelBuilder);
+        ConfigureProviderCredential(modelBuilder);
+        ConfigureProviderUsageRecord(modelBuilder);
+        ConfigureVoiceCloneConsent(modelBuilder);
+        ConfigureCorrectionDictionary(modelBuilder);
+        ConfigureTranscriptionVersion(modelBuilder);
+
+        // LAN node discovery & provider marketplace configurations
+        ConfigureLanNode(modelBuilder);
+        ConfigureProviderMarketplaceEntry(modelBuilder);
+
+        // Model Registry and Benchmark configurations
+        ConfigureModelRegistry(modelBuilder);
+        ConfigureBenchmarkResult(modelBuilder);
+
+        // Prompt Registry, A/B Testing, and Enterprise Policy configurations
+        ConfigurePromptRegistry(modelBuilder);
+        ConfigurePromptABTest(modelBuilder);
+        ConfigureEnterprisePolicy(modelBuilder);
     }
 
     /// <summary>
@@ -2799,5 +2845,350 @@ public partial class AppDbContext : DbContext, IAppDbContext
         e.Property(s => s.UpdatedAt).IsRequired();
 
         e.HasIndex(s => new { s.WorkspaceId, s.Key }).IsUnique();
+    }
+
+    private static void ConfigureAudioAsset(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AudioAsset>();
+        e.ToTable("audio_assets");
+        e.HasKey(a => a.Id);
+        e.Property(a => a.Id).HasColumnType("uuid");
+        e.Property(a => a.SourceId).HasColumnType("uuid");
+        e.Property(a => a.WorkspaceId).HasColumnType("uuid");
+        e.Property(a => a.UserId).HasColumnType("uuid");
+        e.Property(a => a.OriginalFilePath).IsRequired().HasMaxLength(2048);
+        e.Property(a => a.NormalizedFilePath).HasMaxLength(2048);
+        e.Property(a => a.SourceSha256).IsRequired().HasMaxLength(128);
+        e.Property(a => a.MimeType).IsRequired().HasMaxLength(255);
+        e.Property(a => a.DataClassification).IsRequired().HasMaxLength(50);
+        e.Property(a => a.CreatedAt).IsRequired();
+        e.Property(a => a.UpdatedAt).IsRequired();
+
+        e.HasIndex(a => a.SourceSha256);
+        e.HasIndex(a => new { a.WorkspaceId, a.CreatedAt });
+    }
+
+    private static void ConfigureTranscriptionJob(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<TranscriptionJob>();
+        e.ToTable("transcription_jobs");
+        e.HasKey(j => j.Id);
+        e.Property(j => j.Id).HasColumnType("uuid");
+        e.Property(j => j.AudioAssetId).HasColumnType("uuid");
+        e.Property(j => j.WorkspaceId).HasColumnType("uuid");
+        e.Property(j => j.UserId).HasColumnType("uuid");
+        e.Property(j => j.ExecutionMode).IsRequired().HasMaxLength(50);
+        e.Property(j => j.CredentialMode).IsRequired().HasMaxLength(50);
+        e.Property(j => j.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(j => j.ModelId).IsRequired().HasMaxLength(100);
+        e.Property(j => j.FallbackPolicy).IsRequired().HasMaxLength(50);
+        e.Property(j => j.Language).HasMaxLength(20);
+        e.Property(j => j.Hotwords).HasColumnType("text");
+        e.Property(j => j.Status).IsRequired().HasMaxLength(50);
+        e.Property(j => j.ErrorMessage).HasMaxLength(2000);
+        e.Property(j => j.DocumentId).HasColumnType("uuid");
+        e.Property(j => j.CreatedAt).IsRequired();
+
+        e.HasIndex(j => j.AudioAssetId);
+        e.HasIndex(j => new { j.WorkspaceId, j.Status });
+        e.HasIndex(j => new { j.UserId, j.CreatedAt });
+    }
+
+    private static void ConfigureTranscriptionSegment(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<TranscriptionSegment>();
+        e.ToTable("transcription_segments");
+        e.HasKey(s => s.Id);
+        e.Property(s => s.Id).HasColumnType("uuid");
+        e.Property(s => s.TranscriptionJobId).HasColumnType("uuid");
+        e.Property(s => s.DocumentId).HasColumnType("uuid");
+        e.Property(s => s.WorkspaceId).HasColumnType("uuid");
+        e.Property(s => s.SegmentUuid).IsRequired().HasMaxLength(64);
+        e.Property(s => s.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(s => s.ModelId).IsRequired().HasMaxLength(100);
+        e.Property(s => s.SpeakerKey).HasMaxLength(100);
+        e.Property(s => s.Text).HasColumnType("text");
+        e.Property(s => s.Version).IsRequired().HasMaxLength(50);
+        e.Property(s => s.CreatedAt).IsRequired();
+        e.Property(s => s.UpdatedAt).IsRequired();
+
+        e.HasIndex(s => s.TranscriptionJobId);
+        e.HasIndex(s => new { s.SegmentUuid, s.Version }).IsUnique();
+        e.HasIndex(s => s.DocumentId);
+    }
+
+    private static void ConfigureProviderCredential(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ProviderCredential>();
+        e.ToTable("provider_credentials");
+        e.HasKey(c => c.Id);
+        e.Property(c => c.Id).HasColumnType("uuid");
+        e.Property(c => c.TenantId).HasColumnType("uuid");
+        e.Property(c => c.OwnerType).IsRequired().HasMaxLength(50);
+        e.Property(c => c.OwnerId).HasColumnType("uuid");
+        e.Property(c => c.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(c => c.CredentialType).IsRequired().HasMaxLength(50);
+        e.Property(c => c.EncryptedSecret).IsRequired().HasColumnType("text");
+        e.Property(c => c.KeyVersion).IsRequired().HasMaxLength(20);
+        e.Property(c => c.Status).IsRequired().HasMaxLength(50);
+        e.Property(c => c.Label).HasMaxLength(200);
+        e.Property(c => c.CreatedAt).IsRequired();
+        e.Property(c => c.UpdatedAt).IsRequired();
+
+        e.HasIndex(c => new { c.ProviderId, c.OwnerType, c.OwnerId, c.Status });
+        e.HasIndex(c => c.TenantId);
+    }
+
+    private static void ConfigureProviderUsageRecord(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ProviderUsageRecord>();
+        e.ToTable("provider_usage_records");
+        e.HasKey(r => r.Id);
+        e.Property(r => r.Id).HasColumnType("uuid");
+        e.Property(r => r.TenantId).HasColumnType("uuid");
+        e.Property(r => r.UserId).HasColumnType("uuid");
+        e.Property(r => r.WorkspaceId).HasColumnType("uuid");
+        e.Property(r => r.Capability).IsRequired().HasMaxLength(100);
+        e.Property(r => r.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(r => r.ModelId).IsRequired().HasMaxLength(100);
+        e.Property(r => r.CredentialMode).IsRequired().HasMaxLength(50);
+        e.Property(r => r.ExecutionMode).IsRequired().HasMaxLength(50);
+        e.Property(r => r.Status).IsRequired().HasMaxLength(50);
+        e.Property(r => r.ErrorMessage).HasMaxLength(2000);
+        e.Property(r => r.TranscriptionJobId).HasColumnType("uuid");
+        e.Property(r => r.CreatedAt).IsRequired();
+
+        e.HasIndex(r => new { r.UserId, r.CreatedAt });
+        e.HasIndex(r => new { r.TenantId, r.CreatedAt });
+        e.HasIndex(r => r.TranscriptionJobId);
+    }
+
+    private static void ConfigureVoiceCloneConsent(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<VoiceCloneConsent>();
+        e.ToTable("voice_clone_consents");
+        e.HasKey(c => c.Id);
+        e.Property(c => c.Id).HasColumnType("uuid");
+        e.Property(c => c.UserId).HasColumnType("uuid");
+        e.Property(c => c.VoiceId).IsRequired().HasMaxLength(200);
+        e.Property(c => c.ConsentStatus).IsRequired().HasMaxLength(50);
+        e.Property(c => c.ConsentMethod).HasMaxLength(100);
+        e.Property(c => c.CreatedAt).IsRequired();
+
+        e.HasIndex(c => new { c.UserId, c.VoiceId });
+        e.HasIndex(c => c.ConsentStatus);
+    }
+
+    private static void ConfigureCorrectionDictionary(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<CorrectionDictionary>();
+        e.ToTable("correction_dictionaries");
+        e.HasKey(d => d.Id);
+        e.Property(d => d.Id).HasColumnType("uuid");
+        e.Property(d => d.WorkspaceId).HasColumnType("uuid");
+        e.Property(d => d.OriginalText).IsRequired().HasMaxLength(500);
+        e.Property(d => d.CorrectedText).IsRequired().HasMaxLength(500);
+        e.Property(d => d.Category).IsRequired().HasMaxLength(50);
+        e.Property(d => d.Language).HasMaxLength(20);
+        e.Property(d => d.CreatedBy).HasMaxLength(100);
+        e.Property(d => d.IsActive).IsRequired();
+        e.Property(d => d.CreatedAt).IsRequired();
+        e.Property(d => d.UpdatedAt).IsRequired();
+
+        e.HasIndex(d => new { d.WorkspaceId, d.Category, d.IsActive });
+        e.HasIndex(d => d.WorkspaceId);
+    }
+
+    private static void ConfigureTranscriptionVersion(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<TranscriptionVersion>();
+        e.ToTable("transcription_versions");
+        e.HasKey(v => v.Id);
+        e.Property(v => v.Id).HasColumnType("uuid");
+        e.Property(v => v.TranscriptionJobId).HasColumnType("uuid");
+        e.Property(v => v.SegmentUuid).IsRequired().HasMaxLength(64);
+        e.Property(v => v.Version).IsRequired().HasMaxLength(50);
+        e.Property(v => v.ParentVersionId).HasColumnType("uuid");
+        e.Property(v => v.Text).HasColumnType("text");
+        e.Property(v => v.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(v => v.ModelId).IsRequired().HasMaxLength(100);
+        e.Property(v => v.CreatedBy).HasMaxLength(200);
+        e.Property(v => v.CreatedAt).IsRequired();
+
+        e.HasIndex(v => v.TranscriptionJobId);
+        e.HasIndex(v => new { v.SegmentUuid, v.Version });
+        e.HasIndex(v => v.ParentVersionId);
+    }
+
+    private static void ConfigureModelRegistry(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ModelRegistry>();
+        e.ToTable("model_registries");
+        e.HasKey(m => m.Id);
+        e.Property(m => m.Id).HasColumnType("uuid");
+        e.Property(m => m.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(m => m.ModelId).IsRequired().HasMaxLength(200);
+        e.Property(m => m.DisplayName).IsRequired().HasMaxLength(500);
+        e.Property(m => m.Capability).IsRequired().HasMaxLength(100);
+        e.Property(m => m.ExecutionModes).HasMaxLength(500);
+        e.Property(m => m.CredentialModes).HasMaxLength(500);
+        e.Property(m => m.SupportedLanguages).HasMaxLength(1000);
+        e.Property(m => m.AcceptedMimeTypes).HasMaxLength(1000);
+        e.Property(m => m.PricingUnit).HasMaxLength(50);
+        e.Property(m => m.DataRegion).HasMaxLength(50);
+        e.Property(m => m.RetentionPolicy).HasMaxLength(500);
+        e.Property(m => m.HealthStatus).IsRequired().HasMaxLength(50);
+        e.Property(m => m.IsEnabled).IsRequired();
+        e.Property(m => m.SupportsStreaming).IsRequired();
+        e.Property(m => m.SupportsBatch).IsRequired();
+        e.Property(m => m.SupportsVad).IsRequired();
+        e.Property(m => m.SupportsPunctuation).IsRequired();
+        e.Property(m => m.SupportsDiarization).IsRequired();
+        e.Property(m => m.SupportsHotwords).IsRequired();
+        e.Property(m => m.SupportsWordTimestamp).IsRequired();
+        e.Property(m => m.SupportsSegmentTimestamp).IsRequired();
+        e.Property(m => m.SendsAudioOffDevice).IsRequired();
+        e.Property(m => m.StoresProviderData).IsRequired();
+        e.Property(m => m.CreatedAt).IsRequired();
+        e.Property(m => m.UpdatedAt).IsRequired();
+
+        e.HasIndex(m => new { m.ProviderId, m.ModelId });
+        e.HasIndex(m => m.Capability);
+        e.HasIndex(m => new { m.IsEnabled, m.Capability });
+    }
+
+    private static void ConfigureBenchmarkResult(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<BenchmarkResult>();
+        e.ToTable("benchmark_results");
+        e.HasKey(b => b.Id);
+        e.Property(b => b.Id).HasColumnType("uuid");
+        e.Property(b => b.ModelRegistryId).HasColumnType("uuid");
+        e.Property(b => b.BenchmarkName).IsRequired().HasMaxLength(200);
+        e.Property(b => b.Cer).HasPrecision(10, 6);
+        e.Property(b => b.Wer).HasPrecision(10, 6);
+        e.Property(b => b.Rtf).HasPrecision(10, 6);
+        e.Property(b => b.Throughput).HasPrecision(12, 4);
+        e.Property(b => b.ProperNounAccuracy).HasPrecision(8, 6);
+        e.Property(b => b.TimestampDeviationMs).HasPrecision(12, 4);
+        e.Property(b => b.SpeakerAccuracy).HasPrecision(8, 6);
+        e.Property(b => b.UserModificationRate).HasPrecision(8, 6);
+        e.Property(b => b.UnitCost).HasPrecision(12, 6);
+        e.Property(b => b.DatasetName).HasMaxLength(200);
+        e.Property(b => b.Notes).HasColumnType("text");
+        e.Property(b => b.EvaluatedAt).IsRequired();
+        e.Property(b => b.CreatedAt).IsRequired();
+
+        e.HasIndex(b => b.ModelRegistryId);
+        e.HasIndex(b => new { b.BenchmarkName, b.EvaluatedAt });
+        e.HasIndex(b => b.DatasetName);
+    }
+
+    private static void ConfigurePromptRegistry(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<PromptRegistry>();
+        e.ToTable("prompt_registries");
+        e.HasKey(p => p.Id);
+        e.Property(p => p.Id).HasColumnType("uuid");
+        e.Property(p => p.PromptKey).IsRequired().HasMaxLength(200);
+        e.Property(p => p.Version).IsRequired().HasMaxLength(50);
+        e.Property(p => p.Title).IsRequired().HasMaxLength(500);
+        e.Property(p => p.Description).HasColumnType("text");
+        e.Property(p => p.SystemPrompt).IsRequired().HasColumnType("text");
+        e.Property(p => p.UserPromptTemplate).IsRequired().HasColumnType("text");
+        e.Property(p => p.Language).HasMaxLength(20);
+        e.Property(p => p.ProviderCompatibility).HasMaxLength(1000);
+        e.Property(p => p.Status).IsRequired().HasMaxLength(50);
+        e.Property(p => p.CreatedBy).HasMaxLength(200);
+        e.Property(p => p.IsActive).IsRequired();
+        e.Property(p => p.CreatedAt).IsRequired();
+        e.Property(p => p.UpdatedAt).IsRequired();
+
+        e.HasIndex(p => new { p.PromptKey, p.Status, p.IsActive });
+        e.HasIndex(p => p.Language);
+    }
+
+    private static void ConfigurePromptABTest(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<PromptABTest>();
+        e.ToTable("prompt_ab_tests");
+        e.HasKey(t => t.Id);
+        e.Property(t => t.Id).HasColumnType("uuid");
+        e.Property(t => t.PromptKey).IsRequired().HasMaxLength(200);
+        e.Property(t => t.Name).IsRequired().HasMaxLength(500);
+        e.Property(t => t.VariantAId).HasColumnType("uuid");
+        e.Property(t => t.VariantBId).HasColumnType("uuid");
+        e.Property(t => t.WinnerVariantId).HasColumnType("uuid");
+        e.Property(t => t.Status).IsRequired().HasMaxLength(50);
+        e.Property(t => t.CreatedBy).HasMaxLength(200);
+        e.Property(t => t.CreatedAt).IsRequired();
+        e.Property(t => t.UpdatedAt).IsRequired();
+
+        e.HasIndex(t => t.PromptKey);
+        e.HasIndex(t => t.Status);
+    }
+
+    private static void ConfigureEnterprisePolicy(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<EnterprisePolicy>();
+        e.ToTable("enterprise_policies");
+        e.HasKey(p => p.Id);
+        e.Property(p => p.Id).HasColumnType("uuid");
+        e.Property(p => p.WorkspaceId).HasColumnType("uuid");
+        e.Property(p => p.PolicyName).IsRequired().HasMaxLength(500);
+        e.Property(p => p.PolicyType).IsRequired().HasMaxLength(100);
+        e.Property(p => p.RulesJson).IsRequired().HasColumnType("text");
+        e.Property(p => p.IsEnabled).IsRequired();
+        e.Property(p => p.CreatedBy).HasMaxLength(200);
+        e.Property(p => p.CreatedAt).IsRequired();
+        e.Property(p => p.UpdatedAt).IsRequired();
+
+        e.HasIndex(p => new { p.WorkspaceId, p.PolicyType, p.IsEnabled });
+        e.HasIndex(p => p.PolicyType);
+    }
+
+    private static void ConfigureLanNode(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<LanNode>();
+        e.ToTable("lan_nodes");
+        e.HasKey(n => n.Id);
+        e.Property(n => n.Id).HasColumnType("uuid");
+        e.Property(n => n.NodeName).IsRequired().HasMaxLength(200);
+        e.Property(n => n.EndpointUrl).IsRequired().HasMaxLength(500);
+        e.Property(n => n.NodeStatus).IsRequired().HasMaxLength(50);
+        e.Property(n => n.Capabilities).HasMaxLength(1000);
+        e.Property(n => n.ProviderIds).HasMaxLength(1000);
+        e.Property(n => n.RegisteredAt).IsRequired();
+        e.Property(n => n.UpdatedAt).IsRequired();
+
+        e.HasIndex(n => n.EndpointUrl).IsUnique();
+        e.HasIndex(n => n.NodeStatus);
+    }
+
+    private static void ConfigureProviderMarketplaceEntry(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ProviderMarketplaceEntry>();
+        e.ToTable("provider_marketplace_entries");
+        e.HasKey(m => m.Id);
+        e.Property(m => m.Id).HasColumnType("uuid");
+        e.Property(m => m.Name).IsRequired().HasMaxLength(200);
+        e.Property(m => m.Description).HasColumnType("text");
+        e.Property(m => m.ProviderId).IsRequired().HasMaxLength(100);
+        e.Property(m => m.Capability).IsRequired().HasMaxLength(100);
+        e.Property(m => m.ExecutionMode).IsRequired().HasMaxLength(50);
+        e.Property(m => m.CredentialMode).IsRequired().HasMaxLength(50);
+        e.Property(m => m.SupportedLanguages).HasMaxLength(1000);
+        e.Property(m => m.PricingUnit).HasMaxLength(50);
+        e.Property(m => m.Version).HasMaxLength(50);
+        e.Property(m => m.Rating).HasPrecision(3, 2);
+        e.Property(m => m.AuthorName).IsRequired().HasMaxLength(200);
+        e.Property(m => m.AuthorUrl).HasMaxLength(500);
+        e.Property(m => m.TagsJson).HasColumnType("jsonb");
+        e.Property(m => m.CreatedAt).IsRequired();
+        e.Property(m => m.UpdatedAt).IsRequired();
+
+        e.HasIndex(m => m.Capability);
+        e.HasIndex(m => m.ProviderId);
+        e.HasIndex(m => m.IsInstalled);
     }
 }
