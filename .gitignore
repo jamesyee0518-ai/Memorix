@@ -49,3 +49,15 @@ downloads/*.zip
 # Documentation directories
 doc/
 docs/
+
+# STT model binaries (sherpa-onnx) — too large for Git
+*.onnx
+*.tar.bz2
+sherpa-onnx/**/test_wavs/
+sherpa-onnx/test_output/
+
+# Generated HTML reports and dev planning
+meeting-service-overview/
+memorix-dev-plan/
+.trae-html-share-packages/
+norm_

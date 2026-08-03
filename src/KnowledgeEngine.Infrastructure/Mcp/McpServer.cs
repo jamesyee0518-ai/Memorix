@@ -7,10 +7,15 @@ using Microsoft.Extensions.Logging;
 namespace KnowledgeEngine.Infrastructure.Mcp;
 
 /// <summary>
-/// MCP (Model Context Protocol) Server that communicates via stdio using JSON-RPC 2.0.
-/// Exposes agent tools (list_topics, search_memory, ask_memory, get_document, get_report)
-/// to AI clients through the MCP protocol.
+/// Legacy hand-rolled MCP server using raw JSON-RPC 2.0 over stdio.
+///
+/// This implementation targeted the 2024-11-05 protocol version and has been
+/// superseded by the official ModelContextProtocol C# SDK v2.0.0 (2026-07-28 spec)
+/// via <see cref="MemorixMcpTools"/> and the SDK's <c>AddMcpServer()</c> hosting
+/// extensions. It remains for backward compatibility but should not be used in
+/// new deployments.
 /// </summary>
+[Obsolete("Use the official ModelContextProtocol SDK via MemorixMcpTools instead.")]
 public class McpServer
 {
     private readonly IServiceProvider _serviceProvider;

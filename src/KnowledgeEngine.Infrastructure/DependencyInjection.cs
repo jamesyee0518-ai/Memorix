@@ -229,8 +229,9 @@ public static class DependencyInjection
         services.AddScoped<IAgentToolService, AgentToolService>();
         services.AddScoped<IAgentPermissionGuard, AgentPermissionGuard>();
 
-        // MCP Server (stdio JSON-RPC 2.0)
-        services.AddSingleton<McpServer>();
+        // MCP Server — registered via the official ModelContextProtocol SDK v2.0.0
+        // in Program.cs when --mcp mode is active. The legacy McpServer class is
+        // retained but no longer registered here.
 
         // ===== Dual-mode Foundation Services =====
 

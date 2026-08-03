@@ -78,6 +78,9 @@ public static class SegmentVersions
     public const string UserEdited = "USER_EDITED";
     public const string Merged = "MERGED";
     public const string Published = "PUBLISHED";
+
+    /// <summary>Live/streaming interim result produced before final transcription.</summary>
+    public const string Interim = "INTERIM";
 }
 
 /// <summary>
