@@ -59,7 +59,7 @@ public class AgentMemoryE2ETests
         var admissionService = new MemoryAdmissionService(db, NullLogger<MemoryAdmissionService>.Instance);
         var permissionGuard = new AgentPermissionGuard(db, NullLogger<AgentPermissionGuard>.Instance);
         var retriever = new MemoryRetriever(db, NullLogger<MemoryRetriever>.Instance);
-        var contextService = new ContextComposer(db, retriever, NullLogger<ContextComposer>.Instance);
+        var contextService = new ContextComposer(db, retriever, sanitizer, NullLogger<ContextComposer>.Instance);
         var memoryService = new AgentMemoryService(
             db,
             sanitizer,

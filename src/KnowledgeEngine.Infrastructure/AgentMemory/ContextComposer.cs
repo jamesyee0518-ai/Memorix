@@ -19,6 +19,7 @@ public class ContextComposer : IAgentContextService
 {
     private readonly IAppDbContext _db;
     private readonly MemoryRetriever _retriever;
+    private readonly MemorySanitizer _sanitizer;
     private readonly ILogger<ContextComposer> _logger;
 
     // Token budget allocation percentages
@@ -52,10 +53,12 @@ public class ContextComposer : IAgentContextService
     public ContextComposer(
         IAppDbContext db,
         MemoryRetriever retriever,
+        MemorySanitizer sanitizer,
         ILogger<ContextComposer> logger)
     {
         _db = db;
         _retriever = retriever;
+        _sanitizer = sanitizer;
         _logger = logger;
     }
 
@@ -79,9 +82,21 @@ public class ContextComposer : IAgentContextService
             };
         }
 
-        // Load all active memory items for this session
+        // Load all active memory items for this session.
+        // Visibility filter:
+        //   Private — only visible if the session user is the owner.
+        //   Agent — if the session has an agent profile, only items with the same agent profile pass;
+        //           if the session has no agent profile, items where the owner matches pass.
+        //   Workspace / UserPortable — visible to anyone in the same workspace.
+        var sessionUserId = session.UserId;
+        var sessionAgentProfileId = session.AgentProfileId;
+
         var items = await _db.AgentMemoryItems
             .Where(i => i.SessionId == sessionId && i.Status == MemoryStatus.Active)
+            .Where(i => i.Visibility != Visibility.Private || i.OwnerUserId == sessionUserId)
+            .Where(i => i.Visibility != Visibility.Agent
+                || (sessionAgentProfileId.HasValue && i.AgentProfileId == sessionAgentProfileId)
+                || (!sessionAgentProfileId.HasValue && i.OwnerUserId == sessionUserId))
             .OrderByDescending(i => i.UpdatedAt)
             .ToListAsync(ct);
 
@@ -100,16 +115,16 @@ public class ContextComposer : IAgentContextService
         var l1Items = items
             .Where(i => L1Kinds.Contains(i.Kind))
             .ToList();
-        var l1Layers = BuildLayer(l1Items, evidences, l1Budget);
+        var l1Layers = await BuildLayerAsync(l1Items, evidences, l1Budget, ct);
 
         // Build L2: Confirmed decisions, preferences, constraints, facts
         var l2Items = items
             .Where(i => L2Kinds.Contains(i.Kind) && i.AdmissionState == AdmissionState.Confirmed)
             .ToList();
-        var l2Layers = BuildLayer(l2Items, evidences, l2Budget);
+        var l2Layers = await BuildLayerAsync(l2Items, evidences, l2Budget, ct);
 
         // Build L3: Evidence links, retrieval entries
-        var l3Layers = BuildEvidenceLayer(items, evidences, l3Budget);
+        var l3Layers = await BuildEvidenceLayerAsync(items, evidences, l3Budget, ct);
 
         var tokenUsed = l1Layers.Sum(EstimateTokens) + l2Layers.Sum(EstimateTokens) + l3Layers.Sum(EstimateTokens);
 
@@ -130,22 +145,29 @@ public class ContextComposer : IAgentContextService
 
     /// <summary>
     /// Builds context layers from memory items, respecting the token budget.
+    /// All content is sanitized before injection to prevent sensitive data exposure.
     /// </summary>
-    private List<ContextLayerDto> BuildLayer(
+    private async Task<List<ContextLayerDto>> BuildLayerAsync(
         List<AgentMemoryItem> items,
         List<AgentMemoryEvidence> evidences,
-        int tokenBudget)
+        int tokenBudget,
+        CancellationToken ct)
     {
         var result = new List<ContextLayerDto>();
         var usedTokens = 0;
 
         foreach (var item in items)
         {
+            // Sanitize content before injecting into the context layer
+            var rawContent = item.Content ?? item.Summary ?? item.Title;
+            var sanitizedContent = await _sanitizer.SanitizeOnReadAsync(rawContent, ct);
+            var sanitizedTitle = await _sanitizer.SanitizeOnReadAsync(item.Title, ct);
+
             var layer = new ContextLayerDto
             {
                 Type = item.Kind.ToString().ToLowerInvariant(),
-                Title = item.Title,
-                Content = item.Content ?? item.Summary ?? item.Title,
+                Title = sanitizedTitle,
+                Content = sanitizedContent,
                 Confidence = item.Confidence,
                 AdmissionState = item.AdmissionState.ToString().ToLowerInvariant(),
                 EvidenceRef = GetEvidenceRef(item.Id, evidences)
@@ -166,11 +188,13 @@ public class ContextComposer : IAgentContextService
 
     /// <summary>
     /// Builds the L3 evidence layer with evidence links and retrieval entries.
+    /// All content is sanitized before injection.
     /// </summary>
-    private List<ContextLayerDto> BuildEvidenceLayer(
+    private async Task<List<ContextLayerDto>> BuildEvidenceLayerAsync(
         List<AgentMemoryItem> items,
         List<AgentMemoryEvidence> evidences,
-        int tokenBudget)
+        int tokenBudget,
+        CancellationToken ct)
     {
         var result = new List<ContextLayerDto>();
         var usedTokens = 0;
@@ -189,14 +213,18 @@ public class ContextComposer : IAgentContextService
                 $"{e.EvidenceKind}:{e.ReferenceId}" +
                 (!string.IsNullOrEmpty(e.Locator) ? $"@{e.Locator}" : "")));
 
+            // Sanitize the evidence summary in case ReferenceId or Locator contains sensitive data
+            var sanitizedSummary = await _sanitizer.SanitizeOnReadAsync(evidenceSummary, ct);
+            var sanitizedTitle = await _sanitizer.SanitizeOnReadAsync(item.Title, ct);
+
             var layer = new ContextLayerDto
             {
                 Type = "evidence",
-                Title = item.Title,
-                Content = evidenceSummary,
+                Title = sanitizedTitle,
+                Content = sanitizedSummary,
                 Confidence = item.Confidence,
                 AdmissionState = item.AdmissionState.ToString().ToLowerInvariant(),
-                EvidenceRef = evidenceSummary
+                EvidenceRef = sanitizedSummary
             };
 
             var tokens = EstimateTokens(layer);
@@ -215,10 +243,12 @@ public class ContextComposer : IAgentContextService
             if (evidenceByItem.ContainsKey(item.Id))
                 continue; // Already have evidence for this item
 
+            var sanitizedTitle = await _sanitizer.SanitizeOnReadAsync(item.Title, ct);
+
             var layer = new ContextLayerDto
             {
                 Type = "retrieval_entry",
-                Title = item.Title,
+                Title = sanitizedTitle,
                 Content = $"item:{item.Id}",
                 Confidence = item.Confidence,
                 AdmissionState = item.AdmissionState.ToString().ToLowerInvariant(),

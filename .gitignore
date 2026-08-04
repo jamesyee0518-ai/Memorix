@@ -59,5 +59,9 @@ sherpa-onnx/test_output/
 # Generated HTML reports and dev planning
 meeting-service-overview/
 memorix-dev-plan/
+agent-memory-dev-plan/
 .trae-html-share-packages/
 norm_
+
+# Local assessment documents
+AGENT_MEMORY_IMPLEMENTATION_COMPARISON_ASSESSMENT.md

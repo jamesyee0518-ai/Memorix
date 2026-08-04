@@ -435,7 +435,8 @@ public class AgentMemoryContractTests
         await db.Database.EnsureCreatedAsync();
 
         var retriever = new MemoryRetriever(db, NullLogger<MemoryRetriever>.Instance);
-        var composer = new ContextComposer(db, retriever, NullLogger<ContextComposer>.Instance);
+        var sanitizer = new MemorySanitizer(NullLogger<MemorySanitizer>.Instance);
+        var composer = new ContextComposer(db, retriever, sanitizer, NullLogger<ContextComposer>.Instance);
 
         var sessionId = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -523,7 +524,8 @@ public class AgentMemoryContractTests
         await db.Database.EnsureCreatedAsync();
 
         var retriever = new MemoryRetriever(db, NullLogger<MemoryRetriever>.Instance);
-        var composer = new ContextComposer(db, retriever, NullLogger<ContextComposer>.Instance);
+        var sanitizer = new MemorySanitizer(NullLogger<MemorySanitizer>.Instance);
+        var composer = new ContextComposer(db, retriever, sanitizer, NullLogger<ContextComposer>.Instance);
 
         var sessionId = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -576,7 +578,8 @@ public class AgentMemoryContractTests
         await db.Database.EnsureCreatedAsync();
 
         var retriever = new MemoryRetriever(db, NullLogger<MemoryRetriever>.Instance);
-        var composer = new ContextComposer(db, retriever, NullLogger<ContextComposer>.Instance);
+        var sanitizer = new MemorySanitizer(NullLogger<MemorySanitizer>.Instance);
+        var composer = new ContextComposer(db, retriever, sanitizer, NullLogger<ContextComposer>.Instance);
 
         var context = await composer.BuildContextPackAsync(Guid.NewGuid(), 2000, CancellationToken.None);
 
