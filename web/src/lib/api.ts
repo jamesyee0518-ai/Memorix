@@ -129,6 +129,16 @@ import type {
   AgentInvocationLog,
   McpConfig,
   AgentToolDefinition,
+  AgentMemorySession,
+  AgentMemoryItem,
+  AgentMemoryEvidence,
+  AgentMemoryFeedback,
+  AgentMemoryAccessLog,
+  AgentMemoryCheckpoint,
+  CaptureMemoryInput,
+  SearchMemoryInput,
+  ContextPackDto,
+  MemoryQualityMetrics,
 } from "./types";
 
 const currentPort =
@@ -2131,6 +2141,169 @@ export const agentApi = {
       method: "GET",
       url: "/agent-profiles/logs",
       params,
+    });
+  },
+};
+
+// ===== Agent Memory API =====
+
+export const agentMemoryApi = {
+  // Sessions
+  listSessions: async (limit = 50, offset = 0): Promise<AgentMemorySession[]> => {
+    return request<AgentMemorySession[]>({
+      method: "GET",
+      url: "/agent-memory/sessions",
+      params: { limit, offset },
+    });
+  },
+
+  getSession: async (id: string): Promise<AgentMemorySession> => {
+    return request<AgentMemorySession>({
+      method: "GET",
+      url: `/agent-memory/sessions/${id}`,
+    });
+  },
+
+  createSession: async (data: {
+    externalSessionKey: string;
+    taskTitle: string;
+    agentProfileId?: string;
+    topicId?: string;
+  }): Promise<AgentMemorySession> => {
+    return request<AgentMemorySession>({
+      method: "POST",
+      url: "/agent-memory/sessions",
+      data,
+    });
+  },
+
+  closeSession: async (id: string): Promise<void> => {
+    return request<void>({
+      method: "POST",
+      url: `/agent-memory/sessions/${id}/close`,
+    });
+  },
+
+  // Memory items
+  searchMemory: async (data: SearchMemoryInput): Promise<AgentMemoryItem[]> => {
+    return request<AgentMemoryItem[]>({
+      method: "POST",
+      url: "/agent-memory/search",
+      data,
+    });
+  },
+
+  getMemoryItem: async (id: string): Promise<AgentMemoryItem> => {
+    return request<AgentMemoryItem>({
+      method: "GET",
+      url: `/agent-memory/items/${id}`,
+    });
+  },
+
+  captureMemory: async (data: CaptureMemoryInput): Promise<AgentMemoryItem> => {
+    return request<AgentMemoryItem>({
+      method: "POST",
+      url: "/agent-memory/items",
+      data,
+    });
+  },
+
+  confirmMemory: async (id: string, action: "confirm" | "reject", note?: string): Promise<AgentMemoryItem> => {
+    return request<AgentMemoryItem>({
+      method: "POST",
+      url: `/agent-memory/items/${id}/confirm`,
+      data: { action, note },
+    });
+  },
+
+  archiveMemory: async (id: string): Promise<void> => {
+    return request<void>({
+      method: "POST",
+      url: `/agent-memory/items/${id}/archive`,
+    });
+  },
+
+  restoreMemory: async (id: string): Promise<void> => {
+    return request<void>({
+      method: "POST",
+      url: `/agent-memory/items/${id}/restore`,
+    });
+  },
+
+  forgetMemory: async (id: string): Promise<void> => {
+    return request<void>({
+      method: "DELETE",
+      url: `/agent-memory/items/${id}`,
+    });
+  },
+
+  // Evidence
+  getEvidence: async (memoryItemId: string): Promise<AgentMemoryEvidence[]> => {
+    return request<AgentMemoryEvidence[]>({
+      method: "GET",
+      url: `/agent-memory/items/${memoryItemId}/evidence`,
+    });
+  },
+
+  // Feedback
+  getFeedback: async (memoryItemId: string): Promise<AgentMemoryFeedback[]> => {
+    return request<AgentMemoryFeedback[]>({
+      method: "GET",
+      url: `/agent-memory/items/${memoryItemId}/feedback`,
+    });
+  },
+
+  // Context pack
+  getContext: async (sessionId: string, maxTokens?: number): Promise<ContextPackDto> => {
+    return request<ContextPackDto>({
+      method: "POST",
+      url: `/agent-memory/sessions/${sessionId}/context`,
+      params: maxTokens ? { maxTokens } : undefined,
+    });
+  },
+
+  // Access logs
+  getAccessLogs: async (params?: {
+    sessionId?: string;
+    memoryItemId?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<AgentMemoryAccessLog[]> => {
+    return request<AgentMemoryAccessLog[]>({
+      method: "GET",
+      url: "/agent-memory/access-log",
+      params,
+    });
+  },
+
+  // Checkpoints
+  createCheckpoint: async (sessionId: string): Promise<AgentMemoryCheckpoint> => {
+    return request<AgentMemoryCheckpoint>({
+      method: "POST",
+      url: `/agent-memory/sessions/${sessionId}/checkpoint`,
+    });
+  },
+
+  listCheckpoints: async (sessionId: string): Promise<AgentMemoryCheckpoint[]> => {
+    return request<AgentMemoryCheckpoint[]>({
+      method: "GET",
+      url: `/agent-memory/sessions/${sessionId}/checkpoints`,
+    });
+  },
+
+  // Metrics
+  getMetrics: async (): Promise<MemoryQualityMetrics> => {
+    return request<MemoryQualityMetrics>({
+      method: "GET",
+      url: "/agent-memory/metrics",
+    });
+  },
+
+  // Health
+  getHealth: async (): Promise<{ status: string; total_sessions: number; total_items: number; total_checkpoints: number }> => {
+    return request({
+      method: "GET",
+      url: "/agent-memory/health",
     });
   },
 };

@@ -2000,3 +2000,143 @@ export interface AgentToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
 }
+
+// ===== Agent Memory =====
+
+export interface AgentMemorySession {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  agentProfileId?: string;
+  externalSessionKey: string;
+  taskTitle: string;
+  status: "active" | "closed";
+  startedAt: string;
+  lastActiveAt: string;
+  closedAt?: string;
+  topicId?: string;
+}
+
+export interface AgentMemoryItem {
+  id: string;
+  sessionId?: string;
+  workspaceId: string;
+  ownerUserId: string;
+  agentProfileId?: string;
+  kind: string;
+  title: string;
+  content?: string;
+  summary?: string;
+  admissionState: "candidate" | "qualified" | "confirmed" | "rejected";
+  confidence: number;
+  visibility: string;
+  importance: number;
+  freshnessAt?: string;
+  status: "active" | "archived" | "forgotten";
+  createdAt: string;
+  evidence?: AgentMemoryEvidence[];
+}
+
+export interface AgentMemoryEvidence {
+  id: string;
+  memoryItemId: string;
+  evidenceKind: string;
+  referenceId: string;
+  locator?: string;
+  relation?: string;
+  capturedAt: string;
+}
+
+export interface AgentMemoryFeedback {
+  id: string;
+  memoryItemId: string;
+  userId: string;
+  action: string;
+  note?: string;
+  createdAt: string;
+}
+
+export interface AgentMemoryAccessLog {
+  id: string;
+  memoryItemId?: string;
+  sessionId?: string;
+  agentProfileId?: string;
+  action: string;
+  traceId?: string;
+  createdAt: string;
+}
+
+export interface AgentMemoryCheckpoint {
+  id: string;
+  sessionId: string;
+  fromSequence: number;
+  toSequence: number;
+  summary?: string;
+  openLoopsJson?: string;
+  decisionsJson?: string;
+  tokenEstimate: number;
+  deliveryState: string;
+  createdAt: string;
+  version: number;
+}
+
+export interface CaptureMemoryInput {
+  sessionId?: string;
+  kind: string;
+  title: string;
+  content?: string;
+  summary?: string;
+  confidence?: number;
+  visibility: string;
+  importance: number;
+  evidence?: Array<{
+    evidenceKind: string;
+    referenceId: string;
+    locator?: string;
+    relation?: string;
+  }>;
+}
+
+export interface SearchMemoryInput {
+  query: string;
+  sessionId?: string;
+  topicId?: string;
+  kind?: string;
+  admissionState?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ContextPackDto {
+  sessionId: string;
+  tokenBudget: number;
+  tokenUsed: number;
+  L1: ContextLayerDto[];
+  L2: ContextLayerDto[];
+  L3: ContextLayerDto[];
+}
+
+export interface ContextLayerDto {
+  type: string;
+  title: string;
+  content?: string;
+  confidence?: number;
+  admissionState?: string;
+  evidenceRef?: string;
+}
+
+export interface MemoryQualityMetrics {
+  totalMemoryItems: number;
+  confirmedItems: number;
+  candidateItems: number;
+  rejectedItems: number;
+  recallRate: number;
+  adoptionRate: number;
+  rejectionRate: number;
+  conflictCount: number;
+  sanitizationHitRate: number;
+  averageConfidence: number;
+  p95LatencyMs: number;
+  estimatedCostUsd: number;
+  embeddingCount: number;
+}
