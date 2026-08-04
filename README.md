@@ -15,7 +15,8 @@ Memorix captures web pages, PDFs, images, audio recordings, notes, and chat inpu
 - **Three workspace modes** — Local (SQLite + local Vault), Cloud (PostgreSQL + object storage), and Hybrid (local knowledge base with mobile capture synced through a cloud Inbox).
 - **Local and cloud models** — Supports Ollama, LM Studio, local models, and any OpenAI-compatible API endpoint.
 - **Voice capabilities** — Speech-to-text via Whisper.cpp, FunASR, and Faster-Whisper; text-to-speech via Fish Speech, Piper, and system TTS. Includes VAD, diarization, post-ASR correction, and a DAG-based transcription pipeline.
-- **MCP / Agent integration** — Expose the knowledge base to Claude, Cursor, Hermes, and local automation scripts through a local MCP server with tools like `search_memory`, `ask_memory`, `get_document`, and `get_report`.
+- **MCP / Agent integration** — Expose knowledge retrieval and governed Agent Memory to MCP-capable clients through local stdio or HTTP transports.
+- **Agent Memory** — Persistent task sessions, evidence-backed memory candidates, review/confirmation, three-layer context packs, checkpoints and handoffs, secret redaction, retention, conflict detection, and auditable access controls.
 - **Entity resolution and knowledge graph** — Deduplication, alias linking, vector-similarity candidate generation, LLM disambiguation, and entity relationship graphing.
 - **Billing and payments** — Token-based metering with shadow pricing, credit system, and WeChat Pay / Alipay integration.
 - **Open export** — Markdown and Obsidian Vault export to avoid data lock-in.
@@ -28,10 +29,10 @@ Memorix follows a clean architecture pattern on the backend with four .NET 10 pr
 
 | Layer | Project | Responsibility |
 |---|---|---|
-| Domain | `KnowledgeEngine.Domain` | 80+ entities (`Source`, `Document`, `DocumentChunk`, `Entity`, `Topic`, `Report`, `AudioAsset`, `TranscriptionJob`, billing and payment entities, etc.) and enums. No external dependencies. |
+| Domain | `KnowledgeEngine.Domain` | 80+ entities (`Source`, `Document`, `DocumentChunk`, `Entity`, `Topic`, `Report`, `AudioAsset`, `TranscriptionJob`, Agent Memory sessions/items/evidence/checkpoints, billing and payment entities, etc.) and enums. No external dependencies. |
 | Application | `KnowledgeEngine.Application` | DTOs, 40+ service interfaces (`ISearchService`, `IEmbeddingService`, `IAsrProvider`, `ITtsProvider`, `IPipelineNode`, etc.), application services, mapping, and DI registration. |
-| Infrastructure | `KnowledgeEngine.Infrastructure` | EF Core with PostgreSQL+pgvector and SQLite, MinIO/S3 object storage, vector stores, document processing pipeline, DAG pipeline engine, audio providers, entity resolution, search/QA, MCP server, agent tools, billing, payments, and reports. |
-| API | `KnowledgeEngine.Api` | 60+ REST controllers, SignalR hubs (`TranscriptionHub`, `TtsHub`), JWT authentication, middleware (error handling, trace ID, agent auth, cloud API proxy), Swagger/OpenAPI. |
+| Infrastructure | `KnowledgeEngine.Infrastructure` | EF Core with PostgreSQL+pgvector and SQLite, MinIO/S3 object storage, vector stores, document processing pipeline, DAG pipeline engine, audio providers, entity resolution, search/QA, MCP server, Agent Memory, billing, payments, and reports. |
+| API | `KnowledgeEngine.Api` | REST controllers including Agent Memory, SignalR hubs (`TranscriptionHub`, `TtsHub`), JWT authentication, middleware (error handling, trace ID, agent auth, cloud API proxy), Swagger/OpenAPI. |
 
 ### Desktop — Tauri 2 + Rust
 
@@ -55,7 +56,7 @@ The marketing site (`preview/`) is a Next.js application with Tailwind CSS and F
 | Caching | Redis 7 |
 | Desktop | Tauri 2, Rust |
 | Mobile | Expo SDK 53, React Native 0.79, React 19 |
-| Web | Next.js 15, React 19, Tailwind CSS, Framer Motion |
+| Web | Next.js 16, React 19, Tailwind CSS, Framer Motion |
 | AI / LLM | OpenAI-compatible APIs, Ollama, LM Studio |
 | Audio / ASR | Whisper.cpp, FunASR, Faster-Whisper, Fish Speech, Piper |
 | Payments | WeChat Pay, Alipay |
@@ -76,13 +77,12 @@ Memorix/
 │   └── scripts/                      # Build, version check, updater manifest scripts
 ├── mobile/                           # Expo / React Native mobile app
 ├── preview/                          # Next.js landing page
+├── tests/                            # .NET integration, security, E2E and regression tests
 ├── scripts/                          # Migrations, build helpers, smoke tests
 │   └── migrations/                   # SQL migrations (PostgreSQL + SQLite)
 ├── deploy/                           # Deployment configs (nginx, web.config, IIS)
-├── doc/                              # Development plans and design documents
-├── docs/                             # Architecture and competitive analysis docs
 ├── docker-compose.yml                # Dev infrastructure (Postgres, Redis, MinIO, audio services)
-└── .github/workflows/                # CI/CD (desktop build)
+└── .github/workflows/                # CI: build, test and vulnerable-package audit
 ```
 
 ## Getting Started
@@ -112,6 +112,14 @@ dotnet run
 ```
 
 The API launches with Swagger UI at `http://localhost:9101` (or the port configured in `Properties/launchSettings.json`). Database migrations are applied automatically on startup for SQLite; for PostgreSQL, run the SQL scripts in `scripts/migrations/`.
+
+### Run Tests
+
+```bash
+dotnet test tests/KnowledgeEngine.Infrastructure.Tests/KnowledgeEngine.Infrastructure.Tests.csproj
+```
+
+The GitHub Actions workflow builds the API, runs the test suite, and audits direct and transitive NuGet dependencies on pull requests and pushes to `main`.
 
 ### Run the Desktop App
 
@@ -164,7 +172,7 @@ Environment-specific overrides go in `appsettings.Development.json`. Secrets sho
 
 ### Desktop Distribution
 
-Desktop builds are produced via Tauri's bundler and distributed through the auto-update manifest hosted at `https://memorix.hiqer.top/desktop-updates/stable/latest.json`. The GitHub Actions workflow in `.github/workflows/desktop-build.yml` handles CI builds. Build artifacts include:
+Desktop builds are produced via Tauri's bundler and distributed through the auto-update manifest hosted at `https://memorix.hiqer.top/desktop-updates/stable/latest.json`. Build artifacts include:
 
 - macOS: `.dmg` (Apple Silicon)
 - Windows: `.msi` / `.exe` (x64)
@@ -204,9 +212,9 @@ psql -h localhost -U ke_user -d knowledge_engine -f scripts/migrations/20260801_
 
 The runtime router (`RuntimeRouter`) transparently switches between local and cloud repositories based on the workspace binding, so the same API surface serves all three modes.
 
-## MCP / Agent Integration
+## MCP and Agent Memory
 
-Memorix exposes a local MCP server (`KnowledgeEngine.Infrastructure/Mcp/McpServer.cs`) that allows external agents to interact with the knowledge base within authorized scopes. Available tools include:
+Memorix exposes a local MCP server (`KnowledgeEngine.Infrastructure/Mcp/McpServer.cs`) that allows external agents to interact with the knowledge base and Agent Memory within authorized scopes. Knowledge tools include:
 
 - `list_topics` — List knowledge base topics
 - `search_memory` — Hybrid search across documents and chunks
@@ -216,7 +224,17 @@ Memorix exposes a local MCP server (`KnowledgeEngine.Infrastructure/Mcp/McpServe
 - `import_url` — Import a web page into the Inbox
 - `create_inbox_item` — Create a new Inbox item
 
-Agent access is gated by API keys and workspace authorization. The `AgentPermissionGuard` enforces per-agent scopes.
+Agent Memory tools provide durable, governed task continuity:
+
+- `memory_start_session` — Create or resume an Agent Memory session.
+- `memory_get_context` — Return a token-budgeted context pack with L1 immediate state, L2 confirmed memory, and L3 evidence references.
+- `memory_capture` and `memory_search` — Capture evidence-backed candidates and retrieve ranked memory items.
+- `memory_confirm` and `memory_forget` — Confirm/reject a qualified memory item or explicitly soft-delete a confirmed one.
+- `memory_checkpoint` and `memory_handoff` — Create a checkpoint and recover the latest delivered checkpoint for session continuation.
+
+Memory items move through `ephemeral → candidate → qualified → confirmed`; confirmation requires explicit feedback. Content is redacted on write and read, and all memory actions inherit Agent Profile, user, workspace, topic, sensitivity, and scope restrictions. The web app includes session, candidate-review, archive, evidence, checkpoint, and access-log views under Agent Memory.
+
+Agent access is gated by API keys and workspace authorization. `AgentPermissionGuard` enforces per-agent tool and memory scopes.
 
 ## License
 
