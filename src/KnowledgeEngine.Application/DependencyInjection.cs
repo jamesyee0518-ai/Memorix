@@ -1,3 +1,4 @@
+using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -24,6 +25,17 @@ public static class DependencyInjection
         services.AddScoped<InboxService>();
         services.AddScoped<CloudInboxSyncService>();
         services.AddScoped<MediaProcessingService>();
+
+        // Meeting lifecycle services (Phase 6)
+        services.AddScoped<IMeetingService, MeetingService>();
+        services.AddScoped<IRecordingService, RecordingService>();
+        services.AddScoped<IPrivacyTransformationService, PrivacyTransformationService>();
+
+        // Meeting knowledge base publishing (P2)
+        services.AddScoped<IMeetingPublishingService, MeetingPublishingService>();
+
+        // Meeting processing pipeline orchestration (§14 - async task & fault tolerance)
+        services.AddScoped<IMeetingProcessingService, MeetingProcessingService>();
 
         return services;
     }

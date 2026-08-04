@@ -34,6 +34,7 @@ import {
   Languages,
   ShieldCheck,
   WalletCards,
+  BrainCircuit,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
@@ -61,6 +62,7 @@ const navItems = [
   { href: "/topics", label: "专题", icon: FolderOpen },
   { href: "/documents", label: "文档", icon: FileText },
   { href: "/knowledge-graph", label: "图谱", icon: Network },
+  { href: "/agent-memory", label: "Agent记忆", icon: BrainCircuit },
   { href: "/reports", label: "报告", icon: ClipboardList },
   { href: "/exports", label: "导出", icon: FileDown },
   { href: "/entities", label: "实体", icon: Boxes },

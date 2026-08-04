@@ -3,6 +3,7 @@ using KnowledgeEngine.Application.Services;
 using KnowledgeEngine.Application.Settings;
 using KnowledgeEngine.Infrastructure.Ai;
 using KnowledgeEngine.Infrastructure.Agent;
+using KnowledgeEngine.Infrastructure.AgentMemory;
 using KnowledgeEngine.Infrastructure.Db;
 using KnowledgeEngine.Infrastructure.Exports;
 using KnowledgeEngine.Infrastructure.Mcp;
@@ -229,8 +230,29 @@ public static class DependencyInjection
         services.AddScoped<IAgentToolService, AgentToolService>();
         services.AddScoped<IAgentPermissionGuard, AgentPermissionGuard>();
 
-        // MCP Server (stdio JSON-RPC 2.0)
-        services.AddSingleton<McpServer>();
+        // ===== Agent Memory Services (Phase 1) =====
+        services.AddScoped<MemorySanitizer>();
+        services.AddScoped<MemoryAdmissionService>();
+        services.AddScoped<MemoryRetriever>();
+        services.AddScoped<IAgentContextService, ContextComposer>();
+        services.AddScoped<IAgentMemoryService, AgentMemoryService>();
+
+        // ===== Agent Memory Services (Phase 2) =====
+        services.AddScoped<CheckpointService>();
+        services.AddScoped<MemoryEmbeddingService>();
+        services.AddScoped<ConsolidationService>();
+        services.AddScoped<RetentionService>();
+
+        // ===== Agent Memory Services (Phase 3) =====
+        services.AddScoped<HybridSyncService>();
+        services.AddScoped<BackgroundMaintenanceService>();
+        services.AddScoped<ConflictDetectionService>();
+        services.AddScoped<SensitiveDataScanner>();
+        services.AddScoped<MemoryMetricsService>();
+
+        // MCP Server — registered via the official ModelContextProtocol SDK v2.0.0
+        // in Program.cs when --mcp mode is active. The legacy McpServer class is
+        // retained but no longer registered here.
 
         // ===== Dual-mode Foundation Services =====
 

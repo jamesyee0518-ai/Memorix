@@ -9,6 +9,7 @@ using KnowledgeEngine.Infrastructure;
 using KnowledgeEngine.Infrastructure.Db;
 using KnowledgeEngine.Infrastructure.Mcp;
 using KnowledgeEngine.Infrastructure.Reports;
+using ModelContextProtocol.Server;
 using KnowledgeEngine.Api.Hubs;
 using KnowledgeEngine.Api.Middlewares;
 using KnowledgeEngine.Api.Security;
@@ -145,6 +146,19 @@ builder.Services.AddCors(options =>
     });
 });
 
+// MCP Server — official ModelContextProtocol SDK v2.0.0 (2026-07-28 spec).
+// Registered only in --mcp mode; uses stdio transport for JSON-RPC communication.
+// Tools are auto-discovered from the Infrastructure assembly via [McpServerToolType].
+if (isMcpMode)
+{
+    builder.Services.AddMcpServer()
+        .WithStdioServerTransport()
+        .WithToolsFromAssembly(typeof(MemorixMcpTools).Assembly);
+
+    // Suppress Kestrel's default HTTP listener — only stdio transport is needed.
+    builder.WebHost.UseUrls("http://127.0.0.1:0");
+}
+
 var app = builder.Build();
 
 // Database initialization
@@ -262,11 +276,11 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
-// MCP Server mode — run stdio JSON-RPC loop and exit (no HTTP server)
+// MCP Server mode — the SDK's stdio transport runs as a hosted service.
+// The host exits automatically when the MCP client disconnects (stdin EOF).
 if (isMcpMode)
 {
-    var mcpServer = app.Services.GetRequiredService<McpServer>();
-    await mcpServer.RunAsync();
+    await app.RunAsync();
     return;
 }
 
@@ -297,6 +311,8 @@ app.MapControllers();
 
 // SignalR Hubs
 app.MapHub<TranscriptionHub>("/hubs/transcription");
+app.MapHub<MeetingHub>("/hubs/meeting");
+app.MapHub<JobProgressHub>("/hubs/job-progress");
 app.MapHub<TtsHub>("/hubs/tts");
 
 // Health check

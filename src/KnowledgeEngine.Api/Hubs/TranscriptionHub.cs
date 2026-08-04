@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
+using KnowledgeEngine.Domain.Entities;
+using KnowledgeEngine.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -10,24 +12,42 @@ namespace KnowledgeEngine.Api.Hubs;
 /// <summary>
 /// WebSocket hub for real-time streaming transcription.
 /// Clients send audio chunks and receive partial/final transcription results.
+/// When a <see cref="StartSessionRequest.MeetingId"/> is supplied, interim
+/// transcription segments are persisted to the database and broadcast to the
+/// corresponding meeting group via <see cref="MeetingHub"/> so that all
+/// participants receive live subtitles.
 /// </summary>
 [Authorize]
 public class TranscriptionHub : Hub
 {
     private readonly IProviderRegistry _providerRegistry;
     private readonly IAudioPolicyRouter _policyRouter;
+    private readonly IHubContext<MeetingHub> _meetingHubContext;
+    private readonly IAppDbContext _db;
     private readonly ILogger<TranscriptionHub> _logger;
 
     // Per-connection session state: stores the audio buffer and resolved provider.
     private static readonly ConcurrentDictionary<string, StreamingSession> _sessions = new();
 
+    /// <summary>
+    /// Auto-flush threshold: ~30 seconds of 16 kHz, 16-bit, mono PCM audio
+    /// (16 000 samples/s * 2 bytes/sample * 30 s = 960 000 bytes).
+    /// When the buffer reaches this size the buffered audio is transcribed
+    /// automatically to provide real-time partial results.
+    /// </summary>
+    private const long FlushThresholdBytes = 960_000;
+
     public TranscriptionHub(
         IProviderRegistry providerRegistry,
         IAudioPolicyRouter policyRouter,
+        IHubContext<MeetingHub> meetingHubContext,
+        IAppDbContext db,
         ILogger<TranscriptionHub> logger)
     {
         _providerRegistry = providerRegistry;
         _policyRouter = policyRouter;
+        _meetingHubContext = meetingHubContext;
+        _db = db;
         _logger = logger;
     }
 
@@ -57,8 +77,9 @@ public class TranscriptionHub : Hub
     public async Task StartSession(StartSessionRequest request)
     {
         var sessionId = Context.ConnectionId;
-        _logger.LogInformation("TranscriptionHub: starting session {SessionId}, language={Language}, provider={Provider}",
-            sessionId, request.Language, request.PreferredProviderId);
+        _logger.LogInformation(
+            "TranscriptionHub: starting session {SessionId}, language={Language}, provider={Provider}, meeting={MeetingId}",
+            sessionId, request.Language, request.PreferredProviderId, request.MeetingId);
 
         var routingContext = new AsrRoutingContext
         {
@@ -76,6 +97,15 @@ public class TranscriptionHub : Hub
             var provider = await _policyRouter.ResolveAsrProviderAsync(routingContext, Context.ConnectionAborted);
             var descriptor = await provider.GetDescriptorAsync(Context.ConnectionAborted);
 
+            // Resolve the user id from claims for persistence attribution.
+            Guid? userId = null;
+            var userIdClaim = Context.User?.FindFirst("sub")?.Value
+                              ?? Context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (Guid.TryParse(userIdClaim, out var parsedUserId))
+            {
+                userId = parsedUserId;
+            }
+
             // Create and store session state
             var session = new StreamingSession
             {
@@ -86,6 +116,8 @@ public class TranscriptionHub : Hub
                 Hotwords = request.Hotwords,
                 SampleRate = request.SampleRate > 0 ? request.SampleRate : 16000,
                 AudioBuffer = new MemoryStream(),
+                MeetingId = request.MeetingId,
+                UserId = userId,
             };
             _sessions[sessionId] = session;
 
@@ -96,7 +128,8 @@ public class TranscriptionHub : Hub
                     sessionId,
                     providerId = descriptor.ProviderId,
                     modelId = descriptor.ModelId,
-                    supportsStreaming = true
+                    supportsStreaming = true,
+                    meetingId = request.MeetingId
                 });
             }
             else
@@ -108,6 +141,7 @@ public class TranscriptionHub : Hub
                     providerId = descriptor.ProviderId,
                     modelId = descriptor.ModelId,
                     supportsStreaming = false,
+                    meetingId = request.MeetingId,
                     message = "Provider uses batch mode; audio will be transcribed when final chunk is received."
                 });
             }
@@ -122,7 +156,9 @@ public class TranscriptionHub : Hub
     /// <summary>
     /// Receives an audio chunk from the client for streaming transcription.
     /// Buffers audio data; when <see cref="AudioChunkMessage.IsFinal"/> is true,
-    /// triggers transcription and returns results.
+    /// triggers transcription and returns results. When the buffer reaches the
+    /// auto-flush threshold (~30 s of audio) the buffered audio is transcribed
+    /// automatically to provide real-time partial results.
     /// </summary>
     public async Task SendAudioChunk(AudioChunkMessage chunk)
     {
@@ -157,6 +193,18 @@ public class TranscriptionHub : Hub
                 totalBuffered = session.AudioBuffer.Length
             });
 
+            // Auto-flush when buffer reaches ~30 seconds of audio, providing
+            // real-time partial results without waiting for the final chunk.
+            if (!chunk.IsFinal && session.AudioBuffer.Length >= FlushThresholdBytes)
+            {
+                _logger.LogInformation(
+                    "TranscriptionHub: auto-flushing {Bytes} bytes (threshold {Threshold}) for session {SessionId}",
+                    session.AudioBuffer.Length, FlushThresholdBytes, sessionId);
+
+                // Fire-and-forget: do not block the audio ingestion loop.
+                _ = TranscribeBufferedAudioAsync(session, sessionId, Context.ConnectionAborted);
+            }
+
             // If this is the final chunk, trigger transcription
             if (chunk.IsFinal)
             {
@@ -174,6 +222,8 @@ public class TranscriptionHub : Hub
     /// <summary>
     /// Transcribes the buffered audio using the resolved provider.
     /// For streaming-capable providers, uses TranscribeStream; otherwise uses batch TranscribeAsync.
+    /// When meeting integration is active (<see cref="StreamingSession.MeetingId"/> is set),
+    /// interim segments are persisted to the database and broadcast to the meeting group.
     /// </summary>
     private async Task TranscribeBufferedAudioAsync(
         StreamingSession session,
@@ -241,6 +291,20 @@ public class TranscriptionHub : Hub
                             isFinal = partial.IsFinal,
                             segmentIndex = partial.SegmentIndex
                         });
+
+                        // Persist and broadcast interim segments when meeting integration is active.
+                        if (session.MeetingId.HasValue && !string.IsNullOrWhiteSpace(partial.FinalText))
+                        {
+                            await PersistAndBroadcastInterimSegmentAsync(
+                                session, sessionId,
+                                partial.FinalText!,
+                                partial.StartMs ?? 0,
+                                partial.EndMs ?? 0,
+                                partial.SegmentIndex,
+                                speakerKey: null,
+                                confidence: 0m,
+                                ct);
+                        }
                     }
 
                     await Clients.Caller.SendAsync("TranscriptionComplete", new
@@ -275,6 +339,20 @@ public class TranscriptionHub : Hub
                     confidence = segment.Confidence,
                     segmentUuid = segment.SegmentUuid
                 });
+
+                // Persist and broadcast interim segments when meeting integration is active.
+                if (session.MeetingId.HasValue && !string.IsNullOrWhiteSpace(segment.Text))
+                {
+                    await PersistAndBroadcastInterimSegmentAsync(
+                        session, sessionId,
+                        segment.Text,
+                        segment.StartMs,
+                        segment.EndMs,
+                        i,
+                        speakerKey: segment.SpeakerKey,
+                        confidence: segment.Confidence,
+                        ct);
+                }
             }
 
             // Send full text
@@ -312,6 +390,121 @@ public class TranscriptionHub : Hub
             // Clean up temp file
             try { if (File.Exists(tempFilePath)) File.Delete(tempFilePath); }
             catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Lazily creates a <see cref="TranscriptionJob"/> for the streaming session
+    /// (when meeting integration is active) so that <see cref="TranscriptionSegment"/>
+    /// records can reference it. The job ID is cached on the session.
+    /// </summary>
+    private async Task<Guid> EnsureTranscriptionJobAsync(
+        StreamingSession session,
+        string sessionId,
+        CancellationToken ct)
+    {
+        if (session.TranscriptionJobId.HasValue)
+            return session.TranscriptionJobId.Value;
+
+        var job = new TranscriptionJob
+        {
+            Id = Guid.NewGuid(),
+            AudioAssetId = Guid.Empty, // No persisted audio asset for the live stream yet
+            UserId = session.UserId ?? Guid.Empty,
+            ProviderId = session.Descriptor.ProviderId,
+            ModelId = session.Descriptor.ModelId,
+            Language = session.Language,
+            EnablePunctuation = session.EnablePunctuation,
+            EnableVad = false,
+            EnableSpeakerDiarization = false,
+            ExecutionMode = ExecutionMode.MEMORIX_CLOUD.ToString(),
+            CredentialMode = CredentialMode.PLATFORM_MANAGED.ToString(),
+            FallbackPolicy = FallbackPolicies.Stop,
+            Status = TranscriptionJobStatuses.Running,
+            CreatedAt = DateTime.UtcNow,
+            StartedAt = DateTime.UtcNow,
+        };
+
+        _db.TranscriptionJobs.Add(job);
+        await _db.SaveChangesAsync(ct);
+        session.TranscriptionJobId = job.Id;
+
+        _logger.LogInformation(
+            "TranscriptionHub: created INTERIM TranscriptionJob {JobId} for meeting {MeetingId}, session {SessionId}",
+            job.Id, session.MeetingId, sessionId);
+
+        return job.Id;
+    }
+
+    /// <summary>
+    /// Persists an INTERIM <see cref="TranscriptionSegment"/> to the database and
+    /// broadcasts a <see cref="TranscriptUpdateEvent"/> to the meeting group so
+    /// that all participants receive the live subtitle update.
+    /// </summary>
+    private async Task PersistAndBroadcastInterimSegmentAsync(
+        StreamingSession session,
+        string sessionId,
+        string text,
+        long startMs,
+        long endMs,
+        int providerSegmentIndex,
+        string? speakerKey,
+        decimal confidence,
+        CancellationToken ct)
+    {
+        try
+        {
+            var jobId = await EnsureTranscriptionJobAsync(session, sessionId, ct);
+            var segmentIndex = session.SegmentIndex++;
+            var segmentUuid = $"live_{sessionId}_{segmentIndex}";
+
+            var segment = new TranscriptionSegment
+            {
+                Id = Guid.NewGuid(),
+                TranscriptionJobId = jobId,
+                SegmentUuid = segmentUuid,
+                SourceStartMs = startMs,
+                SourceEndMs = endMs,
+                ProviderId = session.Descriptor.ProviderId,
+                ModelId = session.Descriptor.ModelId,
+                Confidence = confidence,
+                SpeakerKey = speakerKey,
+                Text = text,
+                Version = SegmentVersions.Interim,
+                SegmentIndex = segmentIndex,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+
+            _db.TranscriptionSegments.Add(segment);
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogDebug(
+                "TranscriptionHub: persisted INTERIM segment {SegmentUuid} (index {Index}) for meeting {MeetingId}",
+                segmentUuid, segmentIndex, session.MeetingId);
+
+            // Broadcast the transcript update to all meeting participants.
+            var evt = new TranscriptUpdateEvent
+            {
+                MeetingId = session.MeetingId!.Value,
+                Event = "transcript.interim",
+                Sequence = segmentIndex,
+                StartMs = startMs,
+                EndMs = endMs,
+                Text = text,
+                IsFinal = false,
+                SpeakerKey = speakerKey,
+            };
+
+            var groupName = MeetingHub.MeetingGroup(session.MeetingId!.Value);
+            await _meetingHubContext.Clients.Group(groupName).SendAsync("TranscriptUpdate", evt, ct);
+        }
+        catch (Exception ex)
+        {
+            // Persistence/broadcast failures should not break the transcription loop.
+            _logger.LogWarning(ex,
+                "TranscriptionHub: failed to persist/broadcast INTERIM segment for meeting {MeetingId}, session {SessionId}",
+                session.MeetingId, sessionId);
         }
     }
 
@@ -360,6 +553,10 @@ public class TranscriptionHub : Hub
         public List<string>? Hotwords { get; set; }
         public int SampleRate { get; set; } = 16000;
         public MemoryStream AudioBuffer { get; set; } = new();
+        public Guid? MeetingId { get; set; }
+        public Guid? UserId { get; set; }
+        public int SegmentIndex { get; set; } = 0;
+        public Guid? TranscriptionJobId { get; set; }
     }
 }
 
@@ -373,6 +570,7 @@ public class StartSessionRequest
     public List<string>? Hotwords { get; set; }
     public string? PreferredProviderId { get; set; }
     public int SampleRate { get; set; } = 16000;
+    public Guid? MeetingId { get; set; }
 }
 
 /// <summary>

@@ -10,6 +10,9 @@ public class AudioAsset
     public Guid? WorkspaceId { get; set; }
     public Guid? UserId { get; set; }
 
+    /// <summary>Link to the meeting this asset belongs to (if imported via meeting workflow).</summary>
+    public Guid? MeetingId { get; set; }
+
     /// <summary>Original file path or object key.</summary>
     public string OriginalFilePath { get; set; } = string.Empty;
 

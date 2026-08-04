@@ -127,5 +127,22 @@ public interface IAppDbContext
     DbSet<LanNode> LanNodes { get; }
     DbSet<ProviderMarketplaceEntry> ProviderMarketplaceEntries { get; }
 
+    // Meeting entities (Phase 6 - Meeting lifecycle)
+    DbSet<Meeting> Meetings { get; }
+    DbSet<MeetingSpeaker> MeetingSpeakers { get; }
+    DbSet<MeetingMinutesVersion> MeetingMinutesVersions { get; }
+    DbSet<ActionItem> ActionItems { get; }
+    DbSet<PseudonymMapping> PseudonymMappings { get; }
+    DbSet<RecordingChunk> RecordingChunks { get; }
+    DbSet<MeetingProcessingTask> MeetingProcessingTasks { get; }
+
+    // Agent Memory entities (Phase 1 - Agent Memory Infrastructure)
+    DbSet<AgentMemorySession> AgentMemorySessions { get; }
+    DbSet<AgentMemoryItem> AgentMemoryItems { get; }
+    DbSet<AgentMemoryEvidence> AgentMemoryEvidences { get; }
+    DbSet<AgentMemoryFeedback> AgentMemoryFeedbacks { get; }
+    DbSet<AgentMemoryAccessLog> AgentMemoryAccessLogs { get; }
+    DbSet<AgentMemoryCheckpoint> AgentMemoryCheckpoints { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

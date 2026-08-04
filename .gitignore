@@ -47,3 +47,23 @@ preview/.next/
 preview/.npm-cache/
 desktop/src-tauri/tauri.release.conf.json
 downloads/*.zip
+
+# Documentation directories
+doc/
+docs/
+
+# STT model binaries (sherpa-onnx) — too large for Git
+*.onnx
+*.tar.bz2
+sherpa-onnx/**/test_wavs/
+sherpa-onnx/test_output/
+
+# Generated HTML reports and dev planning
+meeting-service-overview/
+memorix-dev-plan/
+agent-memory-dev-plan/
+.trae-html-share-packages/
+norm_
+
+# Local assessment documents
+AGENT_MEMORY_IMPLEMENTATION_COMPARISON_ASSESSMENT.md

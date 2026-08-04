@@ -12,6 +12,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Moq" Version="4.18.4" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/KnowledgeEngine.Api/KnowledgeEngine.Api.csproj" />
@@ -20,6 +21,10 @@
   <ItemGroup>
     <Content Include="../fixtures/entity-resolution-golden-v1.jsonl">
       <Link>fixtures/entity-resolution-golden-v1.jsonl</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="../test-scenarios/memory_annotation_scenarios.json">
+      <Link>test-scenarios/memory_annotation_scenarios.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

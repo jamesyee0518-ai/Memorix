@@ -28,4 +28,13 @@ public class AgentProfile
     public string Status { get; set; } = "active"; // active | disabled
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    // Agent Memory Configuration (Phase 1)
+    public bool MemoryReadEnabled { get; set; } = true;
+    public bool MemoryWriteEnabled { get; set; } = false;
+    public bool MemoryAutoCaptureEnabled { get; set; } = false;
+    public int MemoryMaxContextTokens { get; set; } = 2000;
+    public string MemoryDefaultVisibility { get; set; } = "agent";
+    public string MemoryRetentionPolicy { get; set; } = "standard";
+    public string MemorySensitiveContentPolicy { get; set; } = "redact_and_reject";
 }

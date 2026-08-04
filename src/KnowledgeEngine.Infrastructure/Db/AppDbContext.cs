@@ -1,5 +1,6 @@
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Domain.Entities;
+using KnowledgeEngine.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -133,6 +134,23 @@ public partial class AppDbContext : DbContext, IAppDbContext
     public DbSet<ModelRegistry> ModelRegistries => Set<ModelRegistry>();
     public DbSet<BenchmarkResult> BenchmarkResults => Set<BenchmarkResult>();
 
+    // Meeting entities (Phase 6 - Meeting lifecycle)
+    public DbSet<Meeting> Meetings => Set<Meeting>();
+    public DbSet<MeetingSpeaker> MeetingSpeakers => Set<MeetingSpeaker>();
+    public DbSet<MeetingMinutesVersion> MeetingMinutesVersions => Set<MeetingMinutesVersion>();
+    public DbSet<ActionItem> ActionItems => Set<ActionItem>();
+    public DbSet<PseudonymMapping> PseudonymMappings => Set<PseudonymMapping>();
+    public DbSet<RecordingChunk> RecordingChunks => Set<RecordingChunk>();
+    public DbSet<MeetingProcessingTask> MeetingProcessingTasks => Set<MeetingProcessingTask>();
+
+    // Agent Memory entities (Phase 1 - Agent Memory Infrastructure)
+    public DbSet<AgentMemorySession> AgentMemorySessions => Set<AgentMemorySession>();
+    public DbSet<AgentMemoryItem> AgentMemoryItems => Set<AgentMemoryItem>();
+    public DbSet<AgentMemoryEvidence> AgentMemoryEvidences => Set<AgentMemoryEvidence>();
+    public DbSet<AgentMemoryFeedback> AgentMemoryFeedbacks => Set<AgentMemoryFeedback>();
+    public DbSet<AgentMemoryAccessLog> AgentMemoryAccessLogs => Set<AgentMemoryAccessLog>();
+    public DbSet<AgentMemoryCheckpoint> AgentMemoryCheckpoints => Set<AgentMemoryCheckpoint>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -236,6 +254,23 @@ public partial class AppDbContext : DbContext, IAppDbContext
         ConfigurePromptRegistry(modelBuilder);
         ConfigurePromptABTest(modelBuilder);
         ConfigureEnterprisePolicy(modelBuilder);
+
+        // Meeting lifecycle configurations
+        ConfigureMeeting(modelBuilder);
+        ConfigureMeetingSpeaker(modelBuilder);
+        ConfigureRecordingChunk(modelBuilder);
+        ConfigureMeetingMinutesVersion(modelBuilder);
+        ConfigureActionItem(modelBuilder);
+        ConfigurePseudonymMapping(modelBuilder);
+        ConfigureMeetingProcessingTask(modelBuilder);
+
+        // Agent Memory configurations (Phase 1)
+        ConfigureAgentMemorySession(modelBuilder);
+        ConfigureAgentMemoryItem(modelBuilder);
+        ConfigureAgentMemoryEvidence(modelBuilder);
+        ConfigureAgentMemoryFeedback(modelBuilder);
+        ConfigureAgentMemoryAccessLog(modelBuilder);
+        ConfigureAgentMemoryCheckpoint(modelBuilder);
     }
 
     /// <summary>
@@ -3190,5 +3225,327 @@ public partial class AppDbContext : DbContext, IAppDbContext
         e.HasIndex(m => m.Capability);
         e.HasIndex(m => m.ProviderId);
         e.HasIndex(m => m.IsInstalled);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  Meeting lifecycle entity configurations
+    // ══════════════════════════════════════════════════════════════════════
+
+    private static void ConfigureMeeting(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<Meeting>();
+        e.ToTable("meetings");
+        e.HasKey(m => m.Id);
+        e.Property(m => m.Id).HasColumnType("uuid");
+        e.Property(m => m.WorkspaceId).HasColumnType("uuid");
+        e.Property(m => m.TopicId).HasColumnType("uuid");
+        e.Property(m => m.Title).IsRequired().HasMaxLength(500);
+        e.Property(m => m.Description).HasColumnType("text");
+        e.Property(m => m.Language).IsRequired().HasMaxLength(20);
+        e.Property(m => m.Status).IsRequired().HasMaxLength(50);
+        e.Property(m => m.StartedAt).HasColumnType("timestamptz");
+        e.Property(m => m.EndedAt).HasColumnType("timestamptz");
+        e.Property(m => m.CreatedBy).HasColumnType("uuid");
+        e.Property(m => m.ProcessingPreset).IsRequired().HasMaxLength(50);
+        e.Property(m => m.DataClassification).IsRequired().HasMaxLength(50);
+        e.Property(m => m.OfficialTranscriptVersionId).HasColumnType("uuid");
+        e.Property(m => m.OfficialMinutesVersionId).HasColumnType("uuid");
+        e.Property(m => m.CreatedAt).IsRequired();
+        e.Property(m => m.UpdatedAt).IsRequired();
+
+        e.HasIndex(m => new { m.WorkspaceId, m.CreatedAt });
+        e.HasIndex(m => new { m.CreatedBy, m.CreatedAt });
+        e.HasIndex(m => m.Status);
+        e.HasIndex(m => m.TopicId);
+    }
+
+    private static void ConfigureMeetingSpeaker(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<MeetingSpeaker>();
+        e.ToTable("meeting_speakers");
+        e.HasKey(s => s.Id);
+        e.Property(s => s.Id).HasColumnType("uuid");
+        e.Property(s => s.MeetingId).HasColumnType("uuid");
+        e.Property(s => s.SpeakerKey).IsRequired().HasMaxLength(100);
+        e.Property(s => s.GlobalSpeakerId).IsRequired().HasMaxLength(100);
+        e.Property(s => s.DisplayName).HasMaxLength(200);
+        e.Property(s => s.ParticipantId).HasColumnType("uuid");
+        e.Property(s => s.IdentityStatus).IsRequired().HasMaxLength(50);
+        e.Property(s => s.EmbeddingRef).HasMaxLength(500);
+        e.Property(s => s.Confidence).HasPrecision(8, 6);
+        e.Property(s => s.CreatedAt).IsRequired();
+        e.Property(s => s.UpdatedAt).IsRequired();
+
+        e.HasIndex(s => s.MeetingId);
+        e.HasIndex(s => new { s.MeetingId, s.GlobalSpeakerId });
+        e.HasIndex(s => s.IdentityStatus);
+    }
+
+    private static void ConfigureRecordingChunk(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<RecordingChunk>();
+        e.ToTable("recording_chunks");
+        e.HasKey(r => r.Id);
+        e.Property(r => r.Id).HasColumnType("uuid");
+        e.Property(r => r.MeetingId).HasColumnType("uuid");
+        e.Property(r => r.AssetId).HasColumnType("uuid");
+        e.Property(r => r.LocalUri).IsRequired().HasMaxLength(2048);
+        e.Property(r => r.Codec).IsRequired().HasMaxLength(50);
+        e.Property(r => r.Checksum).HasMaxLength(128);
+        e.Property(r => r.WriteStatus).IsRequired().HasMaxLength(50);
+        e.Property(r => r.RecoveryStatus).HasMaxLength(50);
+        e.Property(r => r.CreatedAt).IsRequired();
+        e.Property(r => r.FinalizedAt).HasColumnType("timestamptz");
+
+        e.HasIndex(r => new { r.MeetingId, r.SequenceNo });
+        e.HasIndex(r => r.WriteStatus);
+        e.HasIndex(r => r.AssetId);
+    }
+
+    private static void ConfigureMeetingMinutesVersion(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<MeetingMinutesVersion>();
+        e.ToTable("meeting_minutes_versions");
+        e.HasKey(m => m.Id);
+        e.Property(m => m.Id).HasColumnType("uuid");
+        e.Property(m => m.MeetingId).HasColumnType("uuid");
+        e.Property(m => m.TranscriptVersionId).HasColumnType("uuid");
+        e.Property(m => m.TemplateId).HasColumnType("uuid");
+        e.Property(m => m.Summary).HasColumnType("text");
+        e.Property(m => m.ContentJson).HasColumnType("text");
+        e.Property(m => m.Provider).IsRequired().HasMaxLength(100);
+        e.Property(m => m.Model).IsRequired().HasMaxLength(100);
+        e.Property(m => m.Status).IsRequired().HasMaxLength(50);
+        e.Property(m => m.CreatedBy).HasMaxLength(200);
+        e.Property(m => m.CreatedAt).IsRequired();
+
+        e.HasIndex(m => m.MeetingId);
+        e.HasIndex(m => new { m.MeetingId, m.Status });
+        e.HasIndex(m => m.TranscriptVersionId);
+    }
+
+    private static void ConfigureActionItem(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<ActionItem>();
+        e.ToTable("action_items");
+        e.Property(a => a.Id).HasColumnType("uuid");
+        e.Property(a => a.MeetingId).HasColumnType("uuid");
+        e.Property(a => a.MinutesVersionId).HasColumnType("uuid");
+        e.Property(a => a.TaskText).HasColumnType("text").IsRequired();
+        e.Property(a => a.OwnerText).HasMaxLength(200);
+        e.Property(a => a.OwnerUserId).HasColumnType("uuid");
+        e.Property(a => a.DueDate).HasColumnType("timestamptz");
+        e.Property(a => a.Priority).IsRequired().HasMaxLength(50);
+        e.Property(a => a.Confidence).HasPrecision(8, 6);
+        e.Property(a => a.ConfirmationStatus).IsRequired().HasMaxLength(50);
+        e.Property(a => a.TaskId).HasColumnType("uuid");
+        e.Property(a => a.SourceSegmentIds).HasColumnType("text");
+        e.Property(a => a.CreatedAt).IsRequired();
+        e.HasKey(a => a.Id);
+
+        e.HasIndex(a => a.MeetingId);
+        e.HasIndex(a => a.ConfirmationStatus);
+        e.HasIndex(a => a.MinutesVersionId);
+    }
+
+    private static void ConfigurePseudonymMapping(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<PseudonymMapping>();
+        e.ToTable("pseudonym_mappings");
+        e.HasKey(p => p.Id);
+        e.Property(p => p.Id).HasColumnType("uuid");
+        e.Property(p => p.MeetingId).HasColumnType("uuid");
+        e.Property(p => p.Scope).IsRequired().HasMaxLength(50);
+        e.Property(p => p.EntityType).IsRequired().HasMaxLength(50);
+        e.Property(p => p.Placeholder).IsRequired().HasMaxLength(200);
+        e.Property(p => p.EncryptedOriginal).HasColumnType("text").IsRequired();
+        e.Property(p => p.NormalizedHash).IsRequired().HasMaxLength(128);
+        e.Property(p => p.CreatedAt).IsRequired();
+        e.Property(p => p.ExpiresAt).HasColumnType("timestamptz");
+
+        e.HasIndex(p => p.MeetingId);
+        e.HasIndex(p => new { p.MeetingId, p.Placeholder });
+        e.HasIndex(p => p.NormalizedHash);
+    }
+
+    private static void ConfigureMeetingProcessingTask(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<MeetingProcessingTask>();
+        e.ToTable("meeting_processing_tasks");
+        e.HasKey(t => t.Id);
+        e.Property(t => t.Id).HasColumnType("uuid");
+        e.Property(t => t.MeetingId).HasColumnType("uuid");
+        e.Property(t => t.AudioAssetId).HasColumnType("uuid");
+        e.Property(t => t.TranscriptionJobId).HasColumnType("uuid");
+        e.Property(t => t.TaskType).IsRequired().HasMaxLength(100);
+        e.Property(t => t.Status).IsRequired().HasMaxLength(50);
+        e.Property(t => t.IdempotencyKey).IsRequired().HasMaxLength(500);
+        e.Property(t => t.ExecutionMode).IsRequired().HasMaxLength(50);
+        e.Property(t => t.CredentialMode).IsRequired().HasMaxLength(50);
+        e.Property(t => t.ProviderId).HasMaxLength(200);
+        e.Property(t => t.ModelId).HasMaxLength(200);
+        e.Property(t => t.DependsOn).HasMaxLength(1000);
+        e.Property(t => t.ErrorMessage).HasColumnType("text");
+        e.Property(t => t.Parameters).HasColumnType("text");
+        e.Property(t => t.ResultData).HasColumnType("text");
+        e.Property(t => t.EstimatedCost).HasPrecision(12, 4);
+        e.Property(t => t.CreatedBy).HasColumnType("uuid");
+        e.Property(t => t.CreatedAt).IsRequired();
+        e.Property(t => t.StartedAt).HasColumnType("timestamptz");
+        e.Property(t => t.FinishedAt).HasColumnType("timestamptz");
+        e.Property(t => t.UpdatedAt).HasColumnType("timestamptz");
+
+        e.HasIndex(t => t.MeetingId);
+        e.HasIndex(t => new { t.MeetingId, t.Status });
+        e.HasIndex(t => t.IdempotencyKey).IsUnique();
+        e.HasIndex(t => t.TaskType);
+    }
+
+    // ===== Agent Memory configurations (Phase 1) =====
+
+    private static void ConfigureAgentMemorySession(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemorySession>();
+        e.ToTable("agent_memory_sessions");
+        e.HasKey(s => s.Id);
+        e.Property(s => s.Id).HasColumnType("uuid");
+        e.Property(s => s.WorkspaceId).HasColumnType("uuid");
+        e.Property(s => s.UserId).HasColumnType("uuid");
+        e.Property(s => s.AgentProfileId).HasColumnType("uuid");
+        e.Property(s => s.ExternalSessionKey).IsRequired().HasMaxLength(500);
+        e.Property(s => s.TaskTitle).IsRequired().HasMaxLength(1000);
+        e.Property(s => s.Status).IsRequired().HasMaxLength(50).HasDefaultValue("active");
+        e.Property(s => s.StartedAt).IsRequired();
+        e.Property(s => s.LastActiveAt).IsRequired();
+        e.Property(s => s.ClosedAt).HasColumnType("timestamptz");
+        e.Property(s => s.TopicId).HasColumnType("uuid");
+
+        e.HasIndex(s => new { s.WorkspaceId, s.UserId, s.Status });
+        e.HasIndex(s => s.ExternalSessionKey);
+        e.HasIndex(s => new { s.UserId, s.LastActiveAt });
+
+        e.HasMany(s => s.Items)
+            .WithOne(i => i.Session!)
+            .HasForeignKey(i => i.SessionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        e.HasMany(s => s.Checkpoints)
+            .WithOne(c => c.Session!)
+            .HasForeignKey(c => c.SessionId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureAgentMemoryItem(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryItem>();
+        e.ToTable("agent_memory_items");
+        e.HasKey(i => i.Id);
+        e.Property(i => i.Id).HasColumnType("uuid");
+        e.Property(i => i.SessionId).HasColumnType("uuid");
+        e.Property(i => i.WorkspaceId).HasColumnType("uuid");
+        e.Property(i => i.OwnerUserId).HasColumnType("uuid");
+        e.Property(i => i.AgentProfileId).HasColumnType("uuid");
+        e.Property(i => i.Kind).HasConversion<string>().HasMaxLength(50);
+        e.Property(i => i.Title).IsRequired().HasMaxLength(1000);
+        e.Property(i => i.Content).HasColumnType("text");
+        e.Property(i => i.Summary).HasColumnType("text");
+        e.Property(i => i.AdmissionState).HasConversion<string>().HasMaxLength(50).HasDefaultValue(AdmissionState.Ephemeral);
+        e.Property(i => i.Confidence).HasPrecision(5, 4);
+        e.Property(i => i.Visibility).HasConversion<string>().HasMaxLength(50).HasDefaultValue(Visibility.Agent);
+        e.Property(i => i.Importance).HasDefaultValue(5);
+        e.Property(i => i.FreshnessAt).HasColumnType("timestamptz");
+        e.Property(i => i.Status).HasConversion<string>().HasMaxLength(50).HasDefaultValue(MemoryStatus.Active);
+        e.Property(i => i.SupersededById).HasColumnType("uuid");
+        e.Property(i => i.SupersedesId).HasColumnType("uuid");
+        e.Property(i => i.CreatedAt).IsRequired();
+        e.Property(i => i.UpdatedAt).IsRequired();
+
+        e.HasIndex(i => new { i.WorkspaceId, i.OwnerUserId, i.Status });
+        e.HasIndex(i => new { i.SessionId, i.AdmissionState });
+        e.HasIndex(i => i.SupersededById);
+        e.HasIndex(i => i.WorkspaceId);
+
+        e.HasMany(i => i.Evidences)
+            .WithOne(ev => ev.MemoryItem!)
+            .HasForeignKey(ev => ev.MemoryItemId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        e.HasMany(i => i.Feedbacks)
+            .WithOne(f => f.MemoryItem!)
+            .HasForeignKey(f => f.MemoryItemId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureAgentMemoryEvidence(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryEvidence>();
+        e.ToTable("agent_memory_evidences");
+        e.HasKey(ev => ev.Id);
+        e.Property(ev => ev.Id).HasColumnType("uuid");
+        e.Property(ev => ev.MemoryItemId).HasColumnType("uuid");
+        e.Property(ev => ev.EvidenceKind).HasConversion<string>().HasMaxLength(50);
+        e.Property(ev => ev.ReferenceId).IsRequired().HasMaxLength(500);
+        e.Property(ev => ev.Locator).HasMaxLength(2000);
+        e.Property(ev => ev.Relation).HasMaxLength(200);
+        e.Property(ev => ev.SnapshotHash).HasMaxLength(128);
+        e.Property(ev => ev.CapturedAt).IsRequired();
+
+        e.HasIndex(ev => ev.MemoryItemId);
+        e.HasIndex(ev => new { ev.EvidenceKind, ev.ReferenceId });
+    }
+
+    private static void ConfigureAgentMemoryFeedback(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryFeedback>();
+        e.ToTable("agent_memory_feedbacks");
+        e.HasKey(f => f.Id);
+        e.Property(f => f.Id).HasColumnType("uuid");
+        e.Property(f => f.MemoryItemId).HasColumnType("uuid");
+        e.Property(f => f.UserId).HasColumnType("uuid");
+        e.Property(f => f.Action).IsRequired().HasMaxLength(50);
+        e.Property(f => f.Note).HasColumnType("text");
+        e.Property(f => f.CreatedAt).IsRequired();
+
+        e.HasIndex(f => f.MemoryItemId);
+        e.HasIndex(f => new { f.UserId, f.CreatedAt });
+    }
+
+    private static void ConfigureAgentMemoryAccessLog(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryAccessLog>();
+        e.ToTable("agent_memory_access_logs");
+        e.HasKey(a => a.Id);
+        e.Property(a => a.Id).HasColumnType("uuid");
+        e.Property(a => a.MemoryItemId).HasColumnType("uuid");
+        e.Property(a => a.SessionId).HasColumnType("uuid");
+        e.Property(a => a.AgentProfileId).HasColumnType("uuid");
+        e.Property(a => a.Action).IsRequired().HasMaxLength(50);
+        e.Property(a => a.TraceId).HasMaxLength(200);
+        e.Property(a => a.CreatedAt).IsRequired();
+
+        e.HasIndex(a => a.MemoryItemId);
+        e.HasIndex(a => a.SessionId);
+        e.HasIndex(a => new { a.CreatedAt });
+    }
+
+    private static void ConfigureAgentMemoryCheckpoint(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryCheckpoint>();
+        e.ToTable("agent_memory_checkpoints");
+        e.HasKey(c => c.Id);
+        e.Property(c => c.Id).HasColumnType("uuid");
+        e.Property(c => c.SessionId).HasColumnType("uuid");
+        e.Property(c => c.FromSequence).IsRequired();
+        e.Property(c => c.ToSequence).IsRequired();
+        e.Property(c => c.Summary).HasColumnType("text");
+        e.Property(c => c.OpenLoopsJson).HasColumnType("text");
+        e.Property(c => c.DecisionsJson).HasColumnType("text");
+        e.Property(c => c.TokenEstimate).IsRequired();
+        e.Property(c => c.DeliveryState).IsRequired().HasMaxLength(50).HasDefaultValue("pending");
+        e.Property(c => c.CreatedAt).IsRequired();
+        e.Property(c => c.Version).IsRequired().HasDefaultValue(1);
+
+        e.HasIndex(c => c.SessionId);
+        e.HasIndex(c => new { c.SessionId, c.Version });
     }
 }
