@@ -21,4 +21,30 @@ public interface IAgentPermissionGuard
     /// unless the profile allows sensitive documents.
     /// </summary>
     Task<List<Document>> FilterSensitiveDocumentsAsync(List<Document> documents, Guid profileId, CancellationToken ct = default);
+
+    // ===== Agent Memory Permission Methods (Phase 1) =====
+
+    /// <summary>
+    /// Checks whether the agent profile is allowed to read agent memory.
+    /// Requires profile.MemoryReadEnabled == true.
+    /// </summary>
+    Task<bool> CanReadMemoryAsync(Guid userId, Guid? agentProfileId, Guid workspaceId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Checks whether the agent profile is allowed to write (capture) agent memory.
+    /// Requires profile.MemoryWriteEnabled == true.
+    /// </summary>
+    Task<bool> CanWriteMemoryAsync(Guid userId, Guid? agentProfileId, Guid workspaceId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Checks whether the agent profile is allowed to confirm agent memory items.
+    /// Requires HasScopeAsync(profileId, "agent_memory:confirm").
+    /// </summary>
+    Task<bool> CanConfirmMemoryAsync(Guid userId, Guid? agentProfileId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Checks whether the agent profile is allowed to delete agent memory items.
+    /// Requires HasScopeAsync(profileId, "agent_memory:delete").
+    /// </summary>
+    Task<bool> CanDeleteMemoryAsync(Guid userId, Guid? agentProfileId, Guid workspaceId, CancellationToken ct = default);
 }

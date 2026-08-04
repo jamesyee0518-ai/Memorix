@@ -136,5 +136,13 @@ public interface IAppDbContext
     DbSet<RecordingChunk> RecordingChunks { get; }
     DbSet<MeetingProcessingTask> MeetingProcessingTasks { get; }
 
+    // Agent Memory entities (Phase 1 - Agent Memory Infrastructure)
+    DbSet<AgentMemorySession> AgentMemorySessions { get; }
+    DbSet<AgentMemoryItem> AgentMemoryItems { get; }
+    DbSet<AgentMemoryEvidence> AgentMemoryEvidences { get; }
+    DbSet<AgentMemoryFeedback> AgentMemoryFeedbacks { get; }
+    DbSet<AgentMemoryAccessLog> AgentMemoryAccessLogs { get; }
+    DbSet<AgentMemoryCheckpoint> AgentMemoryCheckpoints { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

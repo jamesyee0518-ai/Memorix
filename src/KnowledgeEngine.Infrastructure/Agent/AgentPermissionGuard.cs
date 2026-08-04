@@ -327,4 +327,78 @@ public class AgentPermissionGuard : IAgentPermissionGuard
         // Filter out sensitive documents
         return documents.Where(d => !IsSensitiveLevel(d.SensitivityLevel)).ToList();
     }
+
+    // ===== Agent Memory Permission Methods (Phase 1) =====
+
+    /// <inheritdoc/>
+    public async Task<bool> CanReadMemoryAsync(Guid userId, Guid? agentProfileId, Guid workspaceId, CancellationToken ct = default)
+    {
+        if (!agentProfileId.HasValue)
+        {
+            // No profile specified: allow read by default
+            return true;
+        }
+
+        var profile = await GetOrCreateProfileAsync(userId, agentProfileId.Value, ct);
+        if (profile == null)
+        {
+            return false;
+        }
+
+        return profile.MemoryReadEnabled;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> CanWriteMemoryAsync(Guid userId, Guid? agentProfileId, Guid workspaceId, CancellationToken ct = default)
+    {
+        if (!agentProfileId.HasValue)
+        {
+            // No profile specified: deny write by default
+            return false;
+        }
+
+        var profile = await GetOrCreateProfileAsync(userId, agentProfileId.Value, ct);
+        if (profile == null)
+        {
+            return false;
+        }
+
+        return profile.MemoryWriteEnabled;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> CanConfirmMemoryAsync(Guid userId, Guid? agentProfileId, CancellationToken ct = default)
+    {
+        if (!agentProfileId.HasValue)
+        {
+            // No profile specified: deny confirm by default
+            return false;
+        }
+
+        var profile = await GetOrCreateProfileAsync(userId, agentProfileId.Value, ct);
+        if (profile == null)
+        {
+            return false;
+        }
+
+        return await HasScopeAsync(agentProfileId.Value, "agent_memory:confirm", ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> CanDeleteMemoryAsync(Guid userId, Guid? agentProfileId, Guid workspaceId, CancellationToken ct = default)
+    {
+        if (!agentProfileId.HasValue)
+        {
+            // No profile specified: deny delete by default
+            return false;
+        }
+
+        var profile = await GetOrCreateProfileAsync(userId, agentProfileId.Value, ct);
+        if (profile == null)
+        {
+            return false;
+        }
+
+        return await HasScopeAsync(agentProfileId.Value, "agent_memory:delete", ct);
+    }
 }

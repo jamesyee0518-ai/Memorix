@@ -1,0 +1,53 @@
+name: CI
+
+# P-1.ENG-01: 恢复 CI/CD 工作流
+# 触发条件：pull_request 和 push 到 main 分支
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# 同一分支的新运行取消进行中的旧运行，节省 CI 资源
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build, Test & Audit
+    runs-on: ubuntu-latest
+    # .NET 解决方案代码位于 src/，将其作为默认工作目录
+    defaults:
+      run:
+        working-directory: src/
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore KnowledgeEngine.Api/KnowledgeEngine.Api.csproj
+
+      # 门禁 1：dotnet build，0 error
+      - name: Build (0-error gate)
+        run: dotnet build KnowledgeEngine.Api/KnowledgeEngine.Api.csproj --no-restore
+
+      # 门禁 2：dotnet test，全部通过
+      # 测试项目位于仓库根目录的 tests/ 下（与 src/ 同级），通过相对路径引用
+      - name: Run tests (all-pass gate)
+        run: dotnet test ../tests/KnowledgeEngine.Infrastructure.Tests/KnowledgeEngine.Infrastructure.Tests.csproj --verbosity normal
+
+      # 门禁 3：依赖漏洞审计，0 高危/中危
+      # dotnet list package --vulnerable 在检测到漏洞时返回非零退出码（.NET 8+ SDK 行为），
+      # --include-transitive 确保传递依赖（如 AngleSharp）也被审计。
+      # 审计 KnowledgeEngine.Api.csproj 可覆盖全部 src 项目及其传递依赖。
+      - name: Audit vulnerable packages (0 high/moderate gate)
+        run: dotnet list KnowledgeEngine.Api/KnowledgeEngine.Api.csproj package --vulnerable --include-transitive
