@@ -2015,6 +2015,7 @@ export interface AgentMemorySession {
   lastActiveAt: string;
   closedAt?: string;
   topicId?: string;
+  projectId?: string;
 }
 
 export interface AgentMemoryItem {
@@ -2139,4 +2140,112 @@ export interface MemoryQualityMetrics {
   p95LatencyMs: number;
   estimatedCostUsd: number;
   embeddingCount: number;
+}
+
+// ===== Agent Memory — Handoff, Ingest, Project (stages 1-5) =====
+
+export interface AgentMemoryHandoff {
+  id: string;
+  projectId?: string;
+  fromSessionId: string;
+  toSessionId?: string;
+  fromAgent: string;
+  toAgent?: string;
+  task: string;
+  status: "open" | "in_progress" | "done" | "cancelled";
+  contextRefs?: string[];
+  gitBranch?: string;
+  commitSha?: string;
+  resultSummary?: string;
+  createdAt: string;
+  acceptedAt?: string;
+  completedAt?: string;
+}
+
+export interface CreateHandoffInput {
+  fromSessionId: string;
+  toAgent?: string;
+  task: string;
+  contextRefs?: string[];
+  gitBranch?: string;
+  commitSha?: string;
+}
+
+export interface GetHandoffsInput {
+  projectId?: string;
+  toAgent?: string;
+  status?: string;
+  limit?: number;
+}
+
+export interface IngestEventBatch {
+  agent: string;
+  sessionId: string;
+  gitRemote?: string;
+  repoName?: string;
+  gitBranch?: string;
+  commitSha?: string;
+  taskTitle?: string;
+  events: NormalizedEvent[];
+  sourceCursor?: string;
+  checksum?: string;
+}
+
+export interface NormalizedEvent {
+  eventType: string;
+  timestamp: string;
+  userPrompt?: string;
+  aiResponse?: string;
+  toolName?: string;
+  toolInput?: unknown;
+  toolResult?: string;
+  filePath?: string;
+  command?: string;
+  commandOutput?: string;
+  tokensTotal?: number;
+}
+
+export interface IngestResult {
+  sessionId: string;
+  turnsCreated: number;
+  actionsCreated: number;
+  eventsSkipped: number;
+  projectId?: string;
+  message?: string;
+}
+
+export interface AgentMemoryTurn {
+  id: string;
+  sessionId: string;
+  seq: number;
+  userMessage?: string;
+  assistantMessage?: string;
+  actionsCount: number;
+  tokensTotal?: number;
+  status: "active" | "completed";
+  createdAt: string;
+  actions?: AgentMemoryAction[];
+}
+
+export interface AgentMemoryAction {
+  id: string;
+  turnId: string;
+  actionKind: string;
+  toolName?: string;
+  toolInputJson?: string;
+  toolResult?: string;
+  filePath?: string;
+  command?: string;
+  success: boolean;
+  createdAt: string;
+}
+
+export interface Project {
+  id: string;
+  projectKey: string;
+  repoName: string;
+  gitRemote?: string;
+  localRoot?: string;
+  createdAt: string;
+  updatedAt: string;
 }

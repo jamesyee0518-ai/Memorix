@@ -139,6 +139,13 @@ import type {
   SearchMemoryInput,
   ContextPackDto,
   MemoryQualityMetrics,
+  AgentMemoryHandoff,
+  CreateHandoffInput,
+  GetHandoffsInput,
+  IngestEventBatch,
+  IngestResult,
+  AgentMemoryTurn,
+  Project,
 } from "./types";
 
 const currentPort =
@@ -2304,6 +2311,64 @@ export const agentMemoryApi = {
     return request({
       method: "GET",
       url: "/agent-memory/health",
+    });
+  },
+
+  // ── Handoffs (stage 2) ──
+  createHandoff: async (data: CreateHandoffInput): Promise<AgentMemoryHandoff> => {
+    return request<AgentMemoryHandoff>({
+      method: "POST",
+      url: "/agent-memory/handoffs",
+      data,
+    });
+  },
+
+  getHandoffs: async (params?: GetHandoffsInput): Promise<AgentMemoryHandoff[]> => {
+    return request<AgentMemoryHandoff[]>({
+      method: "GET",
+      url: "/agent-memory/handoffs",
+      params: params ?? { status: "open" },
+    });
+  },
+
+  acceptHandoff: async (handoffId: string, toSessionId: string): Promise<AgentMemoryHandoff> => {
+    return request<AgentMemoryHandoff>({
+      method: "POST",
+      url: `/agent-memory/handoffs/${handoffId}/accept`,
+      data: { toSessionId },
+    });
+  },
+
+  completeHandoff: async (handoffId: string, resultSummary: string): Promise<AgentMemoryHandoff> => {
+    return request<AgentMemoryHandoff>({
+      method: "POST",
+      url: `/agent-memory/handoffs/${handoffId}/complete`,
+      data: { resultSummary },
+    });
+  },
+
+  // ── Ingest (stage 3) ──
+  ingestEvents: async (batch: IngestEventBatch): Promise<IngestResult> => {
+    return request<IngestResult>({
+      method: "POST",
+      url: "/agent-memory/ingest",
+      data: batch,
+    });
+  },
+
+  // ── Turns / Actions (stage 3 — view collected events) ──
+  listTurns: async (sessionId: string): Promise<AgentMemoryTurn[]> => {
+    return request<AgentMemoryTurn[]>({
+      method: "GET",
+      url: `/agent-memory/sessions/${sessionId}/turns`,
+    });
+  },
+
+  // ── Projects (stage 1) ──
+  listProjects: async (): Promise<Project[]> => {
+    return request<Project[]>({
+      method: "GET",
+      url: "/agent-memory/projects",
     });
   },
 };

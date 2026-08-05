@@ -22,6 +22,7 @@ namespace KnowledgeEngine.Api.Controllers;
 public class AgentMemoryController : BaseController
 {
     private readonly IAgentMemoryService _memoryService;
+    private readonly IHandoffService _handoffService;
     private readonly ICurrentUserContext _currentUser;
     private readonly IAppDbContext _db;
     private readonly MemoryAdmissionService _admissionService;
@@ -32,6 +33,7 @@ public class AgentMemoryController : BaseController
 
     public AgentMemoryController(
         IAgentMemoryService memoryService,
+        IHandoffService handoffService,
         ICurrentUserContext currentUser,
         IAppDbContext db,
         MemoryAdmissionService admissionService,
@@ -41,6 +43,7 @@ public class AgentMemoryController : BaseController
         IngestService ingestService)
     {
         _memoryService = memoryService;
+        _handoffService = handoffService;
         _currentUser = currentUser;
         _db = db;
         _admissionService = admissionService;
@@ -581,6 +584,207 @@ public class AgentMemoryController : BaseController
         }
     }
 
+    // ===== POST /api/agent-memory/handoffs =====
+
+    /// <summary>
+    /// Create a point-to-point handoff from the current session to another agent.
+    /// </summary>
+    [HttpPost("handoffs")]
+    public async Task<IActionResult> CreateHandoff([FromBody] CreateHandoffInput input, CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null) return Unauthorized();
+        if (input == null || input.FromSessionId == Guid.Empty || string.IsNullOrWhiteSpace(input.Task))
+        {
+            return Ok(ApiResponse<object>.Fail("validation_error",
+                "FromSessionId and Task are required", GetTraceId()));
+        }
+
+        try
+        {
+            // Resolve agent profile from session
+            var session = await _db.AgentMemorySessions
+                .FirstOrDefaultAsync(s => s.Id == input.FromSessionId, ct);
+            var profileId = session?.AgentProfileId;
+
+            var handoff = await _handoffService.CreateHandoffAsync(
+                userId.Value, profileId, input, ct);
+            return StatusCode(201, ApiResponse<object>.Ok(handoff, GetTraceId()));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Ok(ApiResponse<object>.Fail("forbidden", ex.Message, GetTraceId()));
+        }
+        catch (Exception ex)
+        {
+            return Ok(ApiResponse<object>.Fail("handoff_error", ex.Message, GetTraceId()));
+        }
+    }
+
+    // ===== GET /api/agent-memory/handoffs =====
+
+    /// <summary>
+    /// List handoffs, optionally filtered by project, target agent, and status.
+    /// </summary>
+    [HttpGet("handoffs")]
+    public async Task<IActionResult> ListHandoffs(
+        [FromQuery] Guid? projectId,
+        [FromQuery] string? toAgent,
+        [FromQuery] string? status,
+        CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null) return Unauthorized();
+
+        // Resolve agent profile from env or query — for web, use the user's first profile
+        Guid? profileId = null;
+        var profile = await _db.AgentProfiles
+            .FirstOrDefaultAsync(a => a.UserId == userId.Value, ct);
+        profileId = profile?.Id;
+
+        var input = new GetHandoffsInput
+        {
+            ProjectId = projectId,
+            ToAgent = toAgent,
+            Status = status ?? "open"
+        };
+
+        var handoffs = await _handoffService.GetHandoffsAsync(userId.Value, profileId, input, ct);
+        return Ok(ApiResponse<object>.Ok(handoffs, GetTraceId()));
+    }
+
+    // ===== POST /api/agent-memory/handoffs/{id}/accept =====
+
+    [HttpPost("handoffs/{id:guid}/accept")]
+    public async Task<IActionResult> AcceptHandoff(
+        [FromRoute] Guid id,
+        [FromBody] AcceptHandoffRequest request,
+        CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null) return Unauthorized();
+
+        var profile = await _db.AgentProfiles
+            .FirstOrDefaultAsync(a => a.UserId == userId.Value, ct);
+
+        try
+        {
+            var handoff = await _handoffService.AcceptHandoffAsync(
+                userId.Value, profile?.Id, id, request.ToSessionId, ct);
+            return Ok(ApiResponse<object>.Ok(handoff, GetTraceId()));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Ok(ApiResponse<object>.Fail("forbidden", ex.Message, GetTraceId()));
+        }
+        catch (Exception ex)
+        {
+            return Ok(ApiResponse<object>.Fail("handoff_error", ex.Message, GetTraceId()));
+        }
+    }
+
+    // ===== POST /api/agent-memory/handoffs/{id}/complete =====
+
+    [HttpPost("handoffs/{id:guid}/complete")]
+    public async Task<IActionResult> CompleteHandoff(
+        [FromRoute] Guid id,
+        [FromBody] CompleteHandoffRequest request,
+        CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null) return Unauthorized();
+
+        var profile = await _db.AgentProfiles
+            .FirstOrDefaultAsync(a => a.UserId == userId.Value, ct);
+
+        try
+        {
+            var handoff = await _handoffService.CompleteHandoffAsync(
+                userId.Value, profile?.Id, id, request.ResultSummary, ct);
+            return Ok(ApiResponse<object>.Ok(handoff, GetTraceId()));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Ok(ApiResponse<object>.Fail("forbidden", ex.Message, GetTraceId()));
+        }
+        catch (Exception ex)
+        {
+            return Ok(ApiResponse<object>.Fail("handoff_error", ex.Message, GetTraceId()));
+        }
+    }
+
+    // ===== GET /api/agent-memory/sessions/{id}/turns =====
+
+    /// <summary>
+    /// List the raw event turns (collected events) for a session.
+    /// </summary>
+    [HttpGet("sessions/{id:guid}/turns")]
+    public async Task<IActionResult> ListTurns([FromRoute] Guid id, CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null) return Unauthorized();
+
+        var turns = await _db.AgentMemoryTurns
+            .Where(t => t.SessionId == id)
+            .OrderBy(t => t.Seq)
+            .Select(t => new
+            {
+                t.Id,
+                t.SessionId,
+                t.Seq,
+                t.UserMessage,
+                t.AssistantMessage,
+                t.ActionsCount,
+                t.TokensTotal,
+                t.Status,
+                t.CreatedAt,
+                Actions = t.Actions.Select(a => new
+                {
+                    a.Id,
+                    a.TurnId,
+                    a.ActionKind,
+                    a.ToolName,
+                    a.ToolInputJson,
+                    a.ToolResult,
+                    a.FilePath,
+                    a.Command,
+                    a.Success,
+                    a.CreatedAt
+                }).ToList()
+            })
+            .ToListAsync(ct);
+
+        return Ok(ApiResponse<object>.Ok(turns, GetTraceId()));
+    }
+
+    // ===== GET /api/agent-memory/projects =====
+
+    /// <summary>
+    /// List all known projects (canonical git identities).
+    /// </summary>
+    [HttpGet("projects")]
+    public async Task<IActionResult> ListProjects(CancellationToken ct)
+    {
+        var userId = _currentUser.UserId;
+        if (userId == null) return Unauthorized();
+
+        var projects = await _db.Projects
+            .OrderByDescending(p => p.UpdatedAt)
+            .Select(p => new
+            {
+                p.Id,
+                p.ProjectKey,
+                p.RepoName,
+                p.GitRemote,
+                p.LocalRoot,
+                p.CreatedAt,
+                p.UpdatedAt
+            })
+            .ToListAsync(ct);
+
+        return Ok(ApiResponse<object>.Ok(projects, GetTraceId()));
+    }
+
     private (Guid userId, Guid workspaceId)? TryGetUserIdAndWorkspaceId()
     {
         var userId = _currentUser.UserId;
@@ -660,4 +864,20 @@ public class CheckpointDto
     public string DeliveryState { get; set; } = "pending";
     public DateTime CreatedAt { get; set; }
     public int Version { get; set; }
+}
+
+/// <summary>
+/// DTO for accepting a handoff.
+/// </summary>
+public class AcceptHandoffRequest
+{
+    public Guid ToSessionId { get; set; }
+}
+
+/// <summary>
+/// DTO for completing a handoff.
+/// </summary>
+public class CompleteHandoffRequest
+{
+    public string? ResultSummary { get; set; }
 }

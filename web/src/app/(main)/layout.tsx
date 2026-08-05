@@ -35,6 +35,9 @@ import {
   ShieldCheck,
   WalletCards,
   BrainCircuit,
+  ArrowRightLeft,
+  FolderGit2,
+  History,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
@@ -80,6 +83,14 @@ const settingsSubItems = [
   { href: "/settings/api-keys", label: "API Key", icon: KeyRound },
   { href: "/settings/agents", label: "Agent 接入", icon: Bot },
   { href: "/settings/feedback", label: "我的反馈", icon: MessageSquare },
+];
+
+const agentMemorySubItems = [
+  { href: "/agent-memory", label: "会话", icon: BrainCircuit },
+  { href: "/agent-memory/candidates", label: "候选审核", icon: History },
+  { href: "/agent-memory/handoffs", label: "交接看板", icon: ArrowRightLeft },
+  { href: "/agent-memory/projects", label: "Project 归并", icon: FolderGit2 },
+  { href: "/agent-memory/archive", label: "归档", icon: FileDown },
   { href: "/settings/api-docs", label: "API 文档", icon: BookOpen },
   { href: "/settings/inbox", label: "收件箱", icon: Inbox },
 ];
@@ -458,6 +469,8 @@ export default function AppLayout({
             const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
             const isSettings = item.href === "/settings";
             const settingsActive = isSettings && active;
+            const isAgentMemory = item.href === "/agent-memory";
+            const agentMemoryActive = isAgentMemory && active;
             return (
               <div key={item.href}>
                 <Link
@@ -476,6 +489,30 @@ export default function AppLayout({
                 {isSettings && settingsActive && (
                   <div className="ml-6 mt-1 space-y-0.5 border-l border-white/20 pl-3">
                     {settingsSubItems.filter((sub) => !sub.adminOnly || user?.role === "platform_admin").map((sub) => {
+                      const SubIcon = sub.icon;
+                      const subActive = pathname === sub.href;
+                      return (
+                        <Link
+                          key={sub.href}
+                          href={sub.href}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                            subActive
+                              ? "bg-white/10 text-cyan-200"
+                              : "text-white/50 hover:bg-white/10 hover:text-white/80"
+                          )}
+                        >
+                          <SubIcon className="size-3.5" />
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* Agent记忆子菜单 */}
+                {isAgentMemory && agentMemoryActive && (
+                  <div className="ml-6 mt-1 space-y-0.5 border-l border-white/20 pl-3">
+                    {agentMemorySubItems.map((sub) => {
                       const SubIcon = sub.icon;
                       const subActive = pathname === sub.href;
                       return (
