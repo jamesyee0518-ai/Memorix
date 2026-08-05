@@ -86,6 +86,7 @@ public class AgentProfilesController : BaseController
             Id = Guid.NewGuid(),
             UserId = userId.Value,
             Name = request.Name,
+            AgentType = string.IsNullOrWhiteSpace(request.AgentType) ? "unknown" : request.AgentType,
             Description = request.Description,
             AllowedToolNames = request.AllowedToolNames != null
                 ? JsonSerializer.Serialize(request.AllowedToolNames, JsonOptions)
@@ -128,6 +129,9 @@ public class AgentProfilesController : BaseController
 
         if (!string.IsNullOrWhiteSpace(request.Name))
             profile.Name = request.Name;
+
+        if (!string.IsNullOrWhiteSpace(request.AgentType))
+            profile.AgentType = request.AgentType;
 
         profile.Description = request.Description;
         profile.AllowedToolNames = request.AllowedToolNames != null
@@ -346,6 +350,7 @@ public class AgentProfilesController : BaseController
         {
             Id = p.Id,
             Name = p.Name,
+            AgentType = p.AgentType,
             Description = p.Description,
             AllowedToolNames = DeserializeStringList(p.AllowedToolNames),
             AllowedTopicIds = DeserializeStringList(p.AllowedTopicIds),
@@ -382,6 +387,7 @@ public class AgentProfileDto
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string AgentType { get; set; } = "unknown";
     public string? Description { get; set; }
     public List<string>? AllowedToolNames { get; set; }
     public List<string>? AllowedTopicIds { get; set; }
@@ -400,6 +406,7 @@ public class AgentProfileDto
 public class AgentProfileUpsertRequest
 {
     public string Name { get; set; } = string.Empty;
+    public string? AgentType { get; set; }
     public string? Description { get; set; }
     public List<string>? AllowedToolNames { get; set; }
     public List<string>? AllowedTopicIds { get; set; }

@@ -67,3 +67,6 @@ norm_
 
 # Local assessment documents
 AGENT_MEMORY_IMPLEMENTATION_COMPARISON_ASSESSMENT.md
+
+# ZCode agent working files
+.zcode/

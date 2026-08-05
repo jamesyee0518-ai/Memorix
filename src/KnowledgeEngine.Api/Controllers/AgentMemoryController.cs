@@ -28,6 +28,7 @@ public class AgentMemoryController : BaseController
     private readonly CheckpointService _checkpointService;
     private readonly RetentionService _retentionService;
     private readonly MemoryMetricsService _metricsService;
+    private readonly IngestService _ingestService;
 
     public AgentMemoryController(
         IAgentMemoryService memoryService,
@@ -36,7 +37,8 @@ public class AgentMemoryController : BaseController
         MemoryAdmissionService admissionService,
         CheckpointService checkpointService,
         RetentionService retentionService,
-        MemoryMetricsService metricsService)
+        MemoryMetricsService metricsService,
+        IngestService ingestService)
     {
         _memoryService = memoryService;
         _currentUser = currentUser;
@@ -45,6 +47,7 @@ public class AgentMemoryController : BaseController
         _checkpointService = checkpointService;
         _retentionService = retentionService;
         _metricsService = metricsService;
+        _ingestService = ingestService;
     }
 
     // ===== POST /api/agent-memory/sessions =====
@@ -544,6 +547,40 @@ public class AgentMemoryController : BaseController
     /// via <see cref="ICurrentUserContext"/>) and the workspace ID (from the
     /// <c>workspace_id</c> JWT claim). Returns null if either is missing.
     /// </summary>
+    // ===== POST /api/agent-memory/ingest =====
+
+    /// <summary>
+    /// Ingest a batch of normalized agent events from an external collection shim.
+    /// Events are aggregated into turns + actions and stored structurally.
+    /// Idempotent: re-posting the same batch (same SourceCursor + Checksum) is a no-op.
+    /// </summary>
+    [HttpPost("ingest")]
+    public async Task<IActionResult> IngestEvents([FromBody] IngestEventBatch batch, CancellationToken ct)
+    {
+        var ids = TryGetUserIdAndWorkspaceId();
+        if (ids == null)
+        {
+            return Unauthorized();
+        }
+
+        if (batch == null || string.IsNullOrWhiteSpace(batch.Agent) || string.IsNullOrWhiteSpace(batch.SessionId))
+        {
+            return Ok(ApiResponse<IngestResult>.Fail("validation_error",
+                "Agent and SessionId are required", GetTraceId()));
+        }
+
+        try
+        {
+            var result = await _ingestService.IngestAsync(
+                ids.Value.userId, ids.Value.workspaceId, null, batch, ct);
+            return Ok(ApiResponse<IngestResult>.Ok(result, GetTraceId()));
+        }
+        catch (Exception ex)
+        {
+            return Ok(ApiResponse<IngestResult>.Fail("ingest_error", ex.Message, GetTraceId()));
+        }
+    }
+
     private (Guid userId, Guid workspaceId)? TryGetUserIdAndWorkspaceId()
     {
         var userId = _currentUser.UserId;

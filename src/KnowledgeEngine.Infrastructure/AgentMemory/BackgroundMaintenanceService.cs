@@ -20,6 +20,7 @@ public class BackgroundMaintenanceService
     private readonly IAppDbContext _db;
     private readonly RetentionService _retentionService;
     private readonly MemoryEmbeddingService _embeddingService;
+    private readonly MemoryExtractorService _extractorService;
     private readonly ILogger<BackgroundMaintenanceService> _logger;
 
     // Items whose FreshnessAt is older than this (in days) are refreshed
@@ -29,11 +30,13 @@ public class BackgroundMaintenanceService
         IAppDbContext db,
         RetentionService retentionService,
         MemoryEmbeddingService embeddingService,
+        MemoryExtractorService extractorService,
         ILogger<BackgroundMaintenanceService> logger)
     {
         _db = db;
         _retentionService = retentionService;
         _embeddingService = embeddingService;
+        _extractorService = extractorService;
         _logger = logger;
     }
 
@@ -58,11 +61,56 @@ public class BackgroundMaintenanceService
         // Step 4: Detect stale evidence
         report.StaleEvidenceDetected = await DetectStaleEvidenceAsync(ct);
 
+        // Step 5: Extract candidate memories from closed sessions with unprocessed turns
+        report.MemoriesExtracted = await ExtractFromClosedSessionsAsync(ct);
+
         _logger.LogInformation(
-            "RunMaintenanceCycle: completed. FreshnessUpdated={Freshness}, AutoArchived={Archived}, Embedded={Embedded}, StaleEvidence={Stale}",
-            report.FreshnessUpdated, report.AutoArchived, report.Embedded, report.StaleEvidenceDetected);
+            "RunMaintenanceCycle: completed. FreshnessUpdated={Freshness}, AutoArchived={Archived}, Embedded={Embedded}, StaleEvidence={Stale}, MemoriesExtracted={Extracted}",
+            report.FreshnessUpdated, report.AutoArchived, report.Embedded, report.StaleEvidenceDetected, report.MemoriesExtracted);
 
         return report;
+    }
+
+    /// <summary>
+    /// Step 5: Scans closed sessions that have completed turns and runs the
+    /// Memory Extractor to produce candidate memory items.
+    /// </summary>
+    private async Task<int> ExtractFromClosedSessionsAsync(CancellationToken ct)
+    {
+        // Find closed sessions that have completed turns
+        var closedSessions = await _db.AgentMemorySessions
+            .Where(s => s.Status == "closed")
+            .Join(_db.AgentMemoryTurns.Where(t => t.Status == "completed"),
+                  s => s.Id, t => t.SessionId,
+                  (s, t) => s.Id)
+            .Distinct()
+            .ToListAsync(ct);
+
+        if (closedSessions.Count == 0) return 0;
+
+        // Only process sessions that don't already have extracted memories
+        // (check by looking for Summary-kind items with matching session)
+        var totalExtracted = 0;
+        foreach (var sessionId in closedSessions)
+        {
+            var alreadyExtracted = await _db.AgentMemoryItems
+                .AnyAsync(i => i.SessionId == sessionId
+                    && (i.Kind == MemoryKind.Summary || i.Kind == MemoryKind.Decision), ct);
+
+            if (alreadyExtracted) continue;
+
+            try
+            {
+                totalExtracted += await _extractorService.ExtractFromSessionAsync(sessionId, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Memory extraction failed for session {SessionId}", sessionId);
+            }
+        }
+
+        return totalExtracted;
     }
 
     /// <summary>
@@ -256,4 +304,9 @@ public class MaintenanceReport
     /// Number of stale evidence records detected.
     /// </summary>
     public int StaleEvidenceDetected { get; set; }
+
+    /// <summary>
+    /// Number of candidate memories extracted from closed sessions.
+    /// </summary>
+    public int MemoriesExtracted { get; set; }
 }

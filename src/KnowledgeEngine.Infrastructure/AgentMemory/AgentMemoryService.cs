@@ -536,7 +536,8 @@ public class AgentMemoryService : IAgentMemoryService
             StartedAt = session.StartedAt,
             LastActiveAt = session.LastActiveAt,
             ClosedAt = session.ClosedAt,
-            TopicId = session.TopicId
+            TopicId = session.TopicId,
+            ProjectId = session.ProjectId
         };
     }
 

@@ -48,6 +48,9 @@ public interface IAppDbContext
     DbSet<AgentInvocationLog> AgentInvocationLogs { get; }
     DbSet<ReportCitation> ReportCitations { get; }
 
+    // Agent Memory — canonical project identity (cross-agent memory/handoff)
+    DbSet<Project> Projects { get; }
+
     // Phase 4 data-layer entities (tags/entities/embeddings/vector index)
     DbSet<ChunkEmbedding> ChunkEmbeddings { get; }
     DbSet<VectorIndexState> VectorIndexStates { get; }
@@ -143,6 +146,10 @@ public interface IAppDbContext
     DbSet<AgentMemoryFeedback> AgentMemoryFeedbacks { get; }
     DbSet<AgentMemoryAccessLog> AgentMemoryAccessLogs { get; }
     DbSet<AgentMemoryCheckpoint> AgentMemoryCheckpoints { get; }
+    DbSet<AgentMemoryHandoff> AgentMemoryHandoffs { get; }
+    DbSet<AgentMemoryTurn> AgentMemoryTurns { get; }
+    DbSet<AgentMemoryAction> AgentMemoryActions { get; }
+    DbSet<IngestOffset> IngestOffsets { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

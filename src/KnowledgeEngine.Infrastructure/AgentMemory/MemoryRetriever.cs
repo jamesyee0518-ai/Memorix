@@ -86,11 +86,30 @@ public class MemoryRetriever
             query = query.Where(i => i.SessionId == input.SessionId.Value);
         }
 
-        // Apply kind filter
+        // Apply project filter — join through session to ProjectId
+        if (input.ProjectId.HasValue)
+        {
+            query = query.Where(i => i.Session != null && i.Session.ProjectId == input.ProjectId.Value);
+        }
+
+        // Apply kind filter (single kind)
         if (!string.IsNullOrWhiteSpace(input.Kind) &&
             Enum.TryParse<MemoryKind>(input.Kind, true, out var kindFilter))
         {
             query = query.Where(i => i.Kind == kindFilter);
+        }
+
+        // Apply types filter (multiple kinds)
+        if (input.Types != null && input.Types.Count > 0)
+        {
+            var parsedKinds = input.Types
+                .Where(t => Enum.TryParse<MemoryKind>(t, true, out _))
+                .Select(t => Enum.Parse<MemoryKind>(t, true))
+                .ToList();
+            if (parsedKinds.Count > 0)
+            {
+                query = query.Where(i => parsedKinds.Contains(i.Kind));
+            }
         }
 
         // Apply admission state filter
@@ -224,11 +243,30 @@ public class MemoryRetriever
             query = query.Where(i => i.SessionId == input.SessionId.Value);
         }
 
-        // Apply kind filter
+        // Apply project filter — join through session to ProjectId
+        if (input.ProjectId.HasValue)
+        {
+            query = query.Where(i => i.Session != null && i.Session.ProjectId == input.ProjectId.Value);
+        }
+
+        // Apply kind filter (single kind)
         if (!string.IsNullOrWhiteSpace(input.Kind) &&
             Enum.TryParse<MemoryKind>(input.Kind, true, out var kindFilter))
         {
             query = query.Where(i => i.Kind == kindFilter);
+        }
+
+        // Apply types filter (multiple kinds)
+        if (input.Types != null && input.Types.Count > 0)
+        {
+            var parsedKinds = input.Types
+                .Where(t => Enum.TryParse<MemoryKind>(t, true, out _))
+                .Select(t => Enum.Parse<MemoryKind>(t, true))
+                .ToList();
+            if (parsedKinds.Count > 0)
+            {
+                query = query.Where(i => parsedKinds.Contains(i.Kind));
+            }
         }
 
         // Apply admission state filter

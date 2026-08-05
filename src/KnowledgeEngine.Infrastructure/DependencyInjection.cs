@@ -231,6 +231,8 @@ public static class DependencyInjection
         services.AddScoped<IAgentPermissionGuard, AgentPermissionGuard>();
 
         // ===== Agent Memory Services (Phase 1) =====
+        services.AddScoped<ProjectResolver>();
+        services.AddScoped<IngestService>();
         services.AddScoped<MemorySanitizer>();
         services.AddScoped<MemoryAdmissionService>();
         services.AddScoped<MemoryRetriever>();
@@ -238,7 +240,9 @@ public static class DependencyInjection
         services.AddScoped<IAgentMemoryService, AgentMemoryService>();
 
         // ===== Agent Memory Services (Phase 2) =====
+        services.AddScoped<IHandoffService, HandoffService>();
         services.AddScoped<CheckpointService>();
+        services.AddScoped<MemoryExtractorService>();
         services.AddScoped<MemoryEmbeddingService>();
         services.AddScoped<ConsolidationService>();
         services.AddScoped<RetentionService>();

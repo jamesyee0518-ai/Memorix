@@ -7,6 +7,13 @@ public class AgentProfile
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
 
+    /// <summary>
+    /// Structured agent kind, e.g. "codex" | "claude" | "trae" | "cursor".
+    /// Used for handoff routing (from/to agent identity) — not a free-text label
+    /// like <see cref="Name"/>. Defaults to "unknown" for legacy profiles.
+    /// </summary>
+    public string AgentType { get; set; } = "unknown";
+
     // 权限配置
     public string? AllowedToolNames { get; set; } // JSONB: ["list_topics","search_memory","ask_memory","get_document","get_report"]
     public string? AllowedTopicIds { get; set; }  // JSONB: Guid[]

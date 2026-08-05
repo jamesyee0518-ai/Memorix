@@ -13,6 +13,7 @@ public class SessionDto
     public DateTime LastActiveAt { get; set; }
     public DateTime? ClosedAt { get; set; }
     public Guid? TopicId { get; set; }
+    public Guid? ProjectId { get; set; }
 }
 
 public class MemoryItemDto
@@ -62,7 +63,15 @@ public class SearchMemoryInput
     public string Query { get; set; } = string.Empty;
     public Guid? SessionId { get; set; }
     public Guid? TopicId { get; set; }
+    public Guid? ProjectId { get; set; }
     public string? Kind { get; set; }
+
+    /// <summary>Filter by multiple memory kinds (e.g. ["decision","fact","constraint"]).</summary>
+    public List<string>? Types { get; set; }
+
+    /// <summary>Filter by originating agent type (e.g. "codex").</summary>
+    public string? Agent { get; set; }
+
     public string? AdmissionState { get; set; }
     public int Limit { get; set; } = 20;
     public int Offset { get; set; } = 0;

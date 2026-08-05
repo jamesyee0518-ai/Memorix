@@ -54,6 +54,7 @@ public partial class AppDbContext : DbContext, IAppDbContext
     public DbSet<ExportFile> ExportFiles => Set<ExportFile>();
     public DbSet<AgentProfile> AgentProfiles => Set<AgentProfile>();
     public DbSet<AgentInvocationLog> AgentInvocationLogs => Set<AgentInvocationLog>();
+    public DbSet<Project> Projects => Set<Project>();
 
     // Phase 4 data-layer entities (tags/entities/embeddings/vector index)
     public DbSet<ChunkEmbedding> ChunkEmbeddings => Set<ChunkEmbedding>();
@@ -150,6 +151,10 @@ public partial class AppDbContext : DbContext, IAppDbContext
     public DbSet<AgentMemoryFeedback> AgentMemoryFeedbacks => Set<AgentMemoryFeedback>();
     public DbSet<AgentMemoryAccessLog> AgentMemoryAccessLogs => Set<AgentMemoryAccessLog>();
     public DbSet<AgentMemoryCheckpoint> AgentMemoryCheckpoints => Set<AgentMemoryCheckpoint>();
+    public DbSet<AgentMemoryHandoff> AgentMemoryHandoffs => Set<AgentMemoryHandoff>();
+    public DbSet<AgentMemoryTurn> AgentMemoryTurns => Set<AgentMemoryTurn>();
+    public DbSet<AgentMemoryAction> AgentMemoryActions => Set<AgentMemoryAction>();
+    public DbSet<IngestOffset> IngestOffsets => Set<IngestOffset>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -200,6 +205,7 @@ public partial class AppDbContext : DbContext, IAppDbContext
         ConfigureExportFile(modelBuilder);
         ConfigureAgentProfile(modelBuilder);
         ConfigureAgentInvocationLog(modelBuilder);
+        ConfigureProject(modelBuilder);
         ConfigureChunkEmbedding(modelBuilder);
         ConfigureVectorIndexState(modelBuilder);
 
@@ -271,6 +277,10 @@ public partial class AppDbContext : DbContext, IAppDbContext
         ConfigureAgentMemoryFeedback(modelBuilder);
         ConfigureAgentMemoryAccessLog(modelBuilder);
         ConfigureAgentMemoryCheckpoint(modelBuilder);
+        ConfigureAgentMemoryHandoff(modelBuilder);
+        ConfigureAgentMemoryTurn(modelBuilder);
+        ConfigureAgentMemoryAction(modelBuilder);
+        ConfigureIngestOffset(modelBuilder);
     }
 
     /// <summary>
@@ -2314,6 +2324,7 @@ public partial class AppDbContext : DbContext, IAppDbContext
         e.Property(a => a.Id).HasColumnType("uuid");
         e.Property(a => a.UserId).HasColumnType("uuid");
         e.Property(a => a.Name).IsRequired().HasMaxLength(200);
+        e.Property(a => a.AgentType).IsRequired().HasMaxLength(50).HasDefaultValue("unknown");
         e.Property(a => a.Description).HasMaxLength(2000);
         e.Property(a => a.AllowedToolNames).HasColumnType("text");
         e.Property(a => a.AllowedTopicIds).HasColumnType("text");
@@ -3419,10 +3430,12 @@ public partial class AppDbContext : DbContext, IAppDbContext
         e.Property(s => s.LastActiveAt).IsRequired();
         e.Property(s => s.ClosedAt).HasColumnType("timestamptz");
         e.Property(s => s.TopicId).HasColumnType("uuid");
+        e.Property(s => s.ProjectId).HasColumnType("uuid");
 
         e.HasIndex(s => new { s.WorkspaceId, s.UserId, s.Status });
         e.HasIndex(s => s.ExternalSessionKey);
         e.HasIndex(s => new { s.UserId, s.LastActiveAt });
+        e.HasIndex(s => s.ProjectId);
 
         e.HasMany(s => s.Items)
             .WithOne(i => i.Session!)
@@ -3547,5 +3560,108 @@ public partial class AppDbContext : DbContext, IAppDbContext
 
         e.HasIndex(c => c.SessionId);
         e.HasIndex(c => new { c.SessionId, c.Version });
+    }
+
+    private static void ConfigureAgentMemoryHandoff(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryHandoff>();
+        e.ToTable("agent_memory_handoffs");
+        e.HasKey(h => h.Id);
+        e.Property(h => h.Id).HasColumnType("uuid");
+        e.Property(h => h.ProjectId).HasColumnType("uuid");
+        e.Property(h => h.FromSessionId).HasColumnType("uuid");
+        e.Property(h => h.ToSessionId).HasColumnType("uuid");
+        e.Property(h => h.FromAgent).IsRequired().HasMaxLength(50);
+        e.Property(h => h.ToAgent).HasMaxLength(50);
+        e.Property(h => h.Task).IsRequired().HasMaxLength(2000);
+        e.Property(h => h.Status).IsRequired().HasMaxLength(50).HasDefaultValue("open");
+        e.Property(h => h.ContextRefsJson).HasColumnType("text");
+        e.Property(h => h.GitBranch).HasMaxLength(500);
+        e.Property(h => h.CommitSha).HasMaxLength(64);
+        e.Property(h => h.ResultSummary).HasColumnType("text");
+        e.Property(h => h.CreatedAt).IsRequired();
+        e.Property(h => h.AcceptedAt).HasColumnType("timestamptz");
+        e.Property(h => h.CompletedAt).HasColumnType("timestamptz");
+
+        e.HasIndex(h => new { h.ProjectId, h.Status });
+        e.HasIndex(h => new { h.ToAgent, h.Status });
+        e.HasIndex(h => h.FromSessionId);
+
+        e.HasOne(h => h.FromSession)
+            .WithMany()
+            .HasForeignKey(h => h.FromSessionId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigureAgentMemoryTurn(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryTurn>();
+        e.ToTable("agent_memory_turns");
+        e.HasKey(t => t.Id);
+        e.Property(t => t.Id).HasColumnType("uuid");
+        e.Property(t => t.SessionId).HasColumnType("uuid");
+        e.Property(t => t.Seq).IsRequired();
+        e.Property(t => t.UserMessage).HasColumnType("text");
+        e.Property(t => t.AssistantMessage).HasColumnType("text");
+        e.Property(t => t.ActionsCount).IsRequired();
+        e.Property(t => t.Status).IsRequired().HasMaxLength(50).HasDefaultValue("active");
+        e.Property(t => t.CreatedAt).IsRequired();
+
+        e.HasIndex(t => new { t.SessionId, t.Seq });
+
+        e.HasMany(t => t.Actions)
+            .WithOne(a => a.Turn!)
+            .HasForeignKey(a => a.TurnId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private static void ConfigureAgentMemoryAction(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<AgentMemoryAction>();
+        e.ToTable("agent_memory_actions");
+        e.HasKey(a => a.Id);
+        e.Property(a => a.Id).HasColumnType("uuid");
+        e.Property(a => a.TurnId).HasColumnType("uuid");
+        e.Property(a => a.ActionKind).IsRequired().HasMaxLength(50);
+        e.Property(a => a.ToolName).HasMaxLength(200);
+        e.Property(a => a.ToolInputJson).HasColumnType("text");
+        e.Property(a => a.ToolResult).HasColumnType("text");
+        e.Property(a => a.FilePath).HasMaxLength(2000);
+        e.Property(a => a.Command).HasColumnType("text");
+        e.Property(a => a.Success).IsRequired();
+        e.Property(a => a.CreatedAt).IsRequired();
+
+        e.HasIndex(a => a.TurnId);
+        e.HasIndex(a => a.FilePath);
+    }
+
+    private static void ConfigureIngestOffset(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<IngestOffset>();
+        e.ToTable("ingest_offsets");
+        e.HasKey(o => o.Id);
+        e.Property(o => o.Id).HasColumnType("uuid");
+        e.Property(o => o.Source).IsRequired().HasMaxLength(1000);
+        e.Property(o => o.Offset).IsRequired().HasMaxLength(200);
+        e.Property(o => o.Checksum).HasMaxLength(128);
+        e.Property(o => o.IngestedAt).IsRequired();
+
+        e.HasIndex(o => o.Source).IsUnique();
+    }
+
+    private static void ConfigureProject(ModelBuilder modelBuilder)
+    {
+        var e = modelBuilder.Entity<Project>();
+        e.ToTable("projects");
+        e.HasKey(p => p.Id);
+        e.Property(p => p.Id).HasColumnType("uuid");
+        e.Property(p => p.ProjectKey).IsRequired().HasMaxLength(64);
+        e.Property(p => p.RepoName).IsRequired().HasMaxLength(500);
+        e.Property(p => p.GitRemote).HasMaxLength(2048);
+        e.Property(p => p.LocalRoot).HasMaxLength(2048);
+        e.Property(p => p.CreatedAt).IsRequired();
+        e.Property(p => p.UpdatedAt).IsRequired();
+
+        e.HasIndex(p => p.ProjectKey).IsUnique();
     }
 }
