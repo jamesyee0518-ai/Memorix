@@ -25,12 +25,12 @@ import {
   deleteCorrectionEntry,
   listCorrectionEntries,
   updateCorrectionEntry,
-} from "../api/audioClient";
+} from "../../api/audioClient";
 import type {
   AddCorrectionEntryRequest,
   CorrectionDictionaryEntry,
   UpdateCorrectionEntryRequest,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

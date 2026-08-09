@@ -24,13 +24,13 @@ import {
   deleteModel,
   listModels,
   updateModel,
-} from "../api/audioClient";
+} from "../../api/audioClient";
 import {
   AudioCapabilities,
   ModelRegistryStatuses,
   type ModelRegistry,
   type RegisterModelRequest,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

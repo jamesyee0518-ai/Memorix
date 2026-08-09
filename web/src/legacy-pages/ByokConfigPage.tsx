@@ -25,11 +25,11 @@ import {
   deleteCredential,
   listCredentials,
   verifyCredential,
-} from "../api/audioClient";
+} from "../../api/audioClient";
 import {
   CredentialStatuses,
   type ProviderCredential,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

@@ -19,9 +19,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cancelJob, getJobStatus, listJobs, uploadAudio } from "../api/audioClient";
-import { ProviderSelector } from "../components/ProviderSelector";
-import { SegmentEditor } from "../components/SegmentEditor";
+import { cancelJob, getJobStatus, listJobs, uploadAudio } from "../../api/audioClient";
+import { ProviderSelector } from "../../components/ProviderSelector";
+import { SegmentEditor } from "../../components/SegmentEditor";
 import {
   DataClassification,
   FallbackPolicies,
@@ -31,7 +31,7 @@ import {
   type TranscriptionJob,
   type TranscriptionSegment,
   type TranscriptionStatusResponse,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

@@ -25,6 +25,20 @@ public sealed class BillingSchemaUpgradeTests
                     "Status" TEXT NOT NULL,
                     "CreatedAt" TEXT NOT NULL
                 );
+                CREATE TABLE media_jobs (
+                    "Id" TEXT NOT NULL PRIMARY KEY,
+                    "UserId" TEXT NOT NULL,
+                    "WorkspaceId" TEXT NOT NULL,
+                    "Capability" TEXT NOT NULL,
+                    "Status" TEXT NOT NULL,
+                    "Route" TEXT NOT NULL,
+                    "ParametersJson" TEXT NOT NULL,
+                    "InputAssetIdsJson" TEXT NOT NULL,
+                    "OutputAssetIdsJson" TEXT NOT NULL,
+                    "EventsJson" TEXT NOT NULL,
+                    "CancellationRequested" INTEGER NOT NULL,
+                    "CreatedAt" TEXT NOT NULL
+                );
                 """;
             await command.ExecuteNonQueryAsync();
         }
@@ -43,6 +57,9 @@ public sealed class BillingSchemaUpgradeTests
         Assert.Contains("BillingMode", aiJobColumns);
         Assert.Contains("EstimatedCredits", aiJobColumns);
         Assert.Contains("Currency", aiJobColumns);
+
+        var mediaJobColumns = await ReadColumnsAsync(connection, "media_jobs");
+        Assert.Contains("BillingJobId", mediaJobColumns);
 
         var billingTables = await ReadTablesAsync(connection);
         Assert.Contains("billing_accounts", billingTables);

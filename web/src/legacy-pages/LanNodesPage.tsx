@@ -22,11 +22,11 @@ import {
   registerNode,
   unregisterNode,
   updateNodeStatus,
-} from "../api/audioClient";
+} from "../../api/audioClient";
 import {
   LanNodeStatuses,
   type LanNode,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

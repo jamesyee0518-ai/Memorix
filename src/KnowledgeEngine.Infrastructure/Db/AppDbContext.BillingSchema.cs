@@ -8,10 +8,22 @@ public partial class AppDbContext
     {
         if (Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
         {
+            await Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS media_jobs (
+                    "Id" uuid PRIMARY KEY, "UserId" uuid NOT NULL, "WorkspaceId" uuid NOT NULL,
+                    "BillingJobId" uuid NULL, "Capability" varchar(128) NOT NULL, "Status" varchar(32) NOT NULL,
+                    "Route" varchar(32) NOT NULL, "ProviderId" varchar(128) NULL, "ModelId" varchar(256) NULL,
+                    "RunnerId" varchar(128) NULL, "ParametersJson" text NOT NULL, "InputAssetIdsJson" text NOT NULL,
+                    "OutputAssetIdsJson" text NOT NULL, "EventsJson" text NOT NULL, "CancellationRequested" boolean NOT NULL,
+                    "ErrorCode" text NULL, "ErrorMessage" text NULL, "CreatedAt" timestamp with time zone NOT NULL,
+                    "StartedAt" timestamp with time zone NULL, "CompletedAt" timestamp with time zone NULL)
+                """, ct);
             foreach (var statement in PostgresBillingSchemaStatements)
             {
                 await Database.ExecuteSqlRawAsync(statement, ct);
             }
+            await Database.ExecuteSqlRawAsync("ALTER TABLE media_jobs ADD COLUMN IF NOT EXISTS \"BillingJobId\" uuid NULL", ct);
+            await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_media_jobs_BillingJobId\" ON media_jobs (\"BillingJobId\")", ct);
             return;
         }
 
@@ -20,8 +32,19 @@ public partial class AppDbContext
             return;
         }
 
+        await Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS media_jobs (
+                "Id" TEXT NOT NULL CONSTRAINT "PK_media_jobs" PRIMARY KEY, "UserId" TEXT NOT NULL,
+                "WorkspaceId" TEXT NOT NULL, "BillingJobId" TEXT NULL, "Capability" TEXT NOT NULL,
+                "Status" TEXT NOT NULL, "Route" TEXT NOT NULL, "ProviderId" TEXT NULL, "ModelId" TEXT NULL,
+                "RunnerId" TEXT NULL, "ParametersJson" TEXT NOT NULL, "InputAssetIdsJson" TEXT NOT NULL,
+                "OutputAssetIdsJson" TEXT NOT NULL, "EventsJson" TEXT NOT NULL, "CancellationRequested" INTEGER NOT NULL,
+                "ErrorCode" TEXT NULL, "ErrorMessage" TEXT NULL, "CreatedAt" TEXT NOT NULL,
+                "StartedAt" TEXT NULL, "CompletedAt" TEXT NULL)
+            """, ct);
         await Database.ExecuteSqlRawAsync(SqliteAiJobsCreateStatement, ct);
         await EnsureSqliteAiJobColumnsAsync(ct);
+        await EnsureSqliteMediaJobColumnsAsync(ct);
         foreach (var statement in SqliteBillingSchemaStatements)
         {
             await Database.ExecuteSqlRawAsync(statement, ct);
@@ -72,6 +95,30 @@ public partial class AppDbContext
             }
             await Database.ExecuteSqlRawAsync(addition.Value, ct);
         }
+    }
+
+    private async Task EnsureSqliteMediaJobColumnsAsync(CancellationToken ct)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = Database.GetDbConnection().CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info(media_jobs)";
+            if (command.Connection!.State != System.Data.ConnectionState.Open)
+            {
+                await command.Connection.OpenAsync(ct);
+            }
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                columns.Add(reader.GetString(1));
+            }
+        }
+
+        if (!columns.Contains("BillingJobId"))
+        {
+            await Database.ExecuteSqlRawAsync("ALTER TABLE media_jobs ADD COLUMN \"BillingJobId\" TEXT NULL", ct);
+        }
+        await Database.ExecuteSqlRawAsync("CREATE INDEX IF NOT EXISTS \"IX_media_jobs_BillingJobId\" ON media_jobs (\"BillingJobId\")", ct);
     }
 
     private static readonly string[] PostgresBillingSchemaStatements =

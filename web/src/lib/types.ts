@@ -2015,6 +2015,7 @@ export interface AgentMemorySession {
   lastActiveAt: string;
   closedAt?: string;
   topicId?: string;
+  projectId?: string;
 }
 
 export interface AgentMemoryItem {
@@ -2139,4 +2140,547 @@ export interface MemoryQualityMetrics {
   p95LatencyMs: number;
   estimatedCostUsd: number;
   embeddingCount: number;
+}
+
+// ===== Agent Memory — Handoff, Ingest, Project (stages 1-5) =====
+
+export interface AgentMemoryHandoff {
+  id: string;
+  projectId?: string;
+  fromSessionId: string;
+  toSessionId?: string;
+  fromAgent: string;
+  toAgent?: string;
+  task: string;
+  status: "open" | "in_progress" | "done" | "cancelled";
+  contextRefs?: string[];
+  gitBranch?: string;
+  commitSha?: string;
+  resultSummary?: string;
+  createdAt: string;
+  acceptedAt?: string;
+  completedAt?: string;
+}
+
+export interface CreateHandoffInput {
+  fromSessionId: string;
+  toAgent?: string;
+  task: string;
+  contextRefs?: string[];
+  gitBranch?: string;
+  commitSha?: string;
+}
+
+export interface GetHandoffsInput {
+  projectId?: string;
+  toAgent?: string;
+  status?: string;
+  limit?: number;
+}
+
+export interface IngestEventBatch {
+  agent: string;
+  sessionId: string;
+  gitRemote?: string;
+  repoName?: string;
+  gitBranch?: string;
+  commitSha?: string;
+  taskTitle?: string;
+  events: NormalizedEvent[];
+  sourceCursor?: string;
+  checksum?: string;
+}
+
+export interface NormalizedEvent {
+  eventType: string;
+  timestamp: string;
+  userPrompt?: string;
+  aiResponse?: string;
+  toolName?: string;
+  toolInput?: unknown;
+  toolResult?: string;
+  filePath?: string;
+  command?: string;
+  commandOutput?: string;
+  tokensTotal?: number;
+}
+
+export interface IngestResult {
+  sessionId: string;
+  turnsCreated: number;
+  actionsCreated: number;
+  eventsSkipped: number;
+  projectId?: string;
+  message?: string;
+}
+
+export interface AgentMemoryTurn {
+  id: string;
+  sessionId: string;
+  seq: number;
+  userMessage?: string;
+  assistantMessage?: string;
+  actionsCount: number;
+  tokensTotal?: number;
+  status: "active" | "completed";
+  createdAt: string;
+  actions?: AgentMemoryAction[];
+}
+
+export interface AgentMemoryAction {
+  id: string;
+  turnId: string;
+  actionKind: string;
+  toolName?: string;
+  toolInputJson?: string;
+  toolResult?: string;
+  filePath?: string;
+  command?: string;
+  success: boolean;
+  createdAt: string;
+}
+
+export interface Project {
+  id: string;
+  projectKey: string;
+  repoName: string;
+  gitRemote?: string;
+  localRoot?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ===== Meeting =====
+
+export interface MeetingDto {
+  id: string;
+  title: string;
+  description?: string;
+  status: string;
+  workspaceId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MeetingSpeaker {
+  id: string;
+  meetingId: string;
+  speakerKey: string;
+  displayName?: string;
+  identityStatus?: string;
+  segmentCount: number;
+  createdAt: string;
+}
+
+export interface MeetingMinutes {
+  id: string;
+  meetingId: string;
+  contentMarkdown: string;
+  summary?: string;
+  keyDecisions?: string;
+  actionItems?: string;
+  model?: string;
+  isOfficial: boolean;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MeetingActionItem {
+  id: string;
+  meetingId: string;
+  description: string;
+  assignee?: string;
+  dueDate?: string;
+  status: string;
+  isConfirmed: boolean;
+  createdAt: string;
+}
+
+export interface RecordingSession {
+  id: string;
+  meetingId: string;
+  status: string;
+  startedAt?: string;
+  pausedAt?: string;
+  stoppedAt?: string;
+  totalDurationMs?: number;
+}
+
+export interface MeetingAsset {
+  id: string;
+  meetingId: string;
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  assetType: string;
+  createdAt: string;
+}
+
+export interface TranscriptDto {
+  id: string;
+  meetingId: string;
+  language?: string;
+  isOfficial: boolean;
+  status: string;
+  segmentCount: number;
+  createdAt: string;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  transcriptId: string;
+  speakerKey?: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+  confidence?: number;
+  segmentIndex: number;
+  version?: string;
+}
+
+export interface ProcessingTaskStatus {
+  id: string;
+  meetingId: string;
+  taskType: string;
+  status: string;
+  errorMessage?: string;
+  retryCount: number;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+}
+
+// ===== Audio / Transcription Jobs =====
+
+export interface AudioAssetDto {
+  id: string;
+  sourceId: string;
+  workspaceId: string;
+  originalFilePath?: string;
+  normalizedFilePath?: string;
+  sourceSha256?: string;
+  fileSizeBytes: number;
+  mimeType: string;
+  durationMs?: number;
+  sampleRate?: number;
+  channels?: number;
+  dataClassification: string;
+  allowsOffDevice: boolean;
+  createdAt: string;
+}
+
+export interface AudioUploadResponse {
+  audioAssetId: string;
+  transcriptionJobId: string;
+  status: string;
+}
+
+export interface TranscriptionJobDto {
+  id: string;
+  audioAssetId: string;
+  workspaceId: string;
+  userId: string;
+  executionMode?: string;
+  credentialMode?: string;
+  providerId?: string;
+  modelId?: string;
+  fallbackPolicy?: string;
+  language?: string;
+  enableVad: boolean;
+  enableSpeakerDiarization: boolean;
+  enablePunctuation: boolean;
+  hotwords?: string;
+  estimatedCost?: number;
+  actualCost?: number;
+  status: string;
+  errorMessage?: string;
+  documentId?: string;
+  segmentCount: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface TranscriptionSegmentDto {
+  id: string;
+  transcriptionJobId: string;
+  documentId?: string;
+  segmentUuid?: string;
+  sourceStartMs: number;
+  sourceEndMs: number;
+  providerId?: string;
+  modelId?: string;
+  confidence?: number;
+  speakerKey?: string;
+  text: string;
+  version?: string;
+  segmentIndex: number;
+  createdAt: string;
+}
+
+export interface TranscriptionStatusResponse {
+  jobId: string;
+  status: string;
+  progress?: number;
+  segmentCount: number;
+  errorMessage?: string;
+}
+
+export interface AsrProviderDescriptor {
+  providerId: string;
+  displayName: string;
+  capabilities: string[];
+  supportedLanguages: string[];
+  requiresApiKey: boolean;
+  isLocal: boolean;
+  healthStatus: string;
+}
+
+// ===== TTS =====
+
+export interface TtsRequest {
+  text: string;
+  voiceId?: string;
+  language?: string;
+  speed?: number;
+  pitch?: number;
+  preferredProviderId?: string;
+  workspaceId?: string;
+}
+
+export interface TtsResult {
+  audioFilePath: string;
+  providerId: string;
+  modelId?: string;
+  voiceId?: string;
+  durationMs: number;
+  estimatedCost: number;
+  mimeType: string;
+}
+
+export interface TtsProviderDescriptor {
+  providerId: string;
+  displayName: string;
+  capabilities: string[];
+  supportedLanguages: string[];
+  requiresApiKey: boolean;
+  isLocal: boolean;
+  healthStatus: string;
+}
+
+export interface VoiceProfile {
+  voiceId: string;
+  name: string;
+  language: string;
+  gender?: string;
+  description?: string;
+  previewText?: string;
+}
+
+export interface ProviderHealth {
+  providerId: string;
+  status: string;
+  latencyMs?: number;
+  errorMessage?: string;
+  checkedAt: string;
+}
+
+// ===== Model Registry =====
+
+export interface ModelRegistry {
+  id: string;
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  capability: string;
+  executionModes?: string;
+  credentialModes?: string;
+  supportedLanguages?: string;
+  maxFileBytes?: number;
+  maxAudioDurationMs?: number;
+  acceptedMimeTypes?: string;
+  supportsStreaming: boolean;
+  supportsBatch: boolean;
+  supportsVad: boolean;
+  supportsPunctuation: boolean;
+  supportsDiarization: boolean;
+  supportsHotwords: boolean;
+  supportsWordTimestamp: boolean;
+  supportsSegmentTimestamp: boolean;
+  sendsAudioOffDevice: boolean;
+  storesProviderData: boolean;
+  pricingUnit?: string;
+  dataRegion?: string;
+  retentionPolicy?: string;
+  isEnabled: boolean;
+  healthStatus: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RegisterModelRequest {
+  providerId: string;
+  modelId: string;
+  displayName?: string;
+  capability: string;
+  executionModes?: string;
+  credentialModes?: string;
+  supportedLanguages?: string;
+  maxFileBytes?: number;
+  maxAudioDurationMs?: number;
+  acceptedMimeTypes?: string;
+  supportsStreaming?: boolean;
+  supportsBatch?: boolean;
+  supportsVad?: boolean;
+  supportsPunctuation?: boolean;
+  supportsDiarization?: boolean;
+  supportsHotwords?: boolean;
+  supportsWordTimestamp?: boolean;
+  supportsSegmentTimestamp?: boolean;
+  sendsAudioOffDevice?: boolean;
+  storesProviderData?: boolean;
+  pricingUnit?: string;
+  dataRegion?: string;
+  retentionPolicy?: string;
+  isEnabled?: boolean;
+  healthStatus?: string;
+}
+
+// ===== Provider Credentials (BYOK) =====
+
+export interface CredentialDto {
+  id: string;
+  providerId: string;
+  credentialType: string;
+  ownerType: string;
+  ownerId: string;
+  label?: string;
+  status: string;
+  lastVerifiedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+}
+
+export interface StoreCredentialRequest {
+  providerId: string;
+  secret: string;
+  credentialType?: string;
+  label?: string;
+}
+
+// ===== Prompt Registry =====
+
+export interface PromptRegistry {
+  id: string;
+  promptKey: string;
+  version: string;
+  title: string;
+  description?: string;
+  systemPrompt: string;
+  userPromptTemplate?: string;
+  language?: string;
+  providerCompatibility?: string;
+  status: string;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreatePromptRequest {
+  promptKey: string;
+  version?: string;
+  title?: string;
+  description?: string;
+  systemPrompt: string;
+  userPromptTemplate?: string;
+  language?: string;
+  providerCompatibility?: string;
+}
+
+// ===== Correction Dictionary =====
+
+export interface CorrectionDictionaryDto {
+  id: string;
+  workspaceId?: string;
+  originalText: string;
+  correctedText: string;
+  category: string;
+  language?: string;
+  createdBy?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AddCorrectionEntryRequest {
+  workspaceId?: string;
+  original: string;
+  corrected: string;
+  category?: string;
+}
+
+export interface CorrectionResult {
+  originalText: string;
+  correctedText: string;
+  correctionsApplied: number;
+  corrections: Array<{ original: string; corrected: string; category: string }>;
+}
+
+// ===== LAN Nodes =====
+
+export interface LanNode {
+  id: string;
+  endpoint: string;
+  nodeName?: string;
+  status: string;
+  capabilities?: string;
+  lastSeenAt?: string;
+  registeredAt: string;
+}
+
+export interface RegisterLanNodeRequest {
+  endpoint: string;
+}
+
+// ===== Marketplace =====
+
+export interface ProviderMarketplaceEntry {
+  id: string;
+  providerId: string;
+  displayName: string;
+  description?: string;
+  capability: string;
+  iconUrl?: string;
+  rating: number;
+  installCount: number;
+  isInstalled: boolean;
+  metadata?: string;
+  createdAt: string;
+}
+
+// ===== Benchmark =====
+
+export interface BenchmarkResult {
+  id: string;
+  modelRegistryId: string;
+  benchmarkName: string;
+  throughput?: number;
+  rtf?: number;
+  ttfbMs?: number;
+  accuracy?: number;
+  status: string;
+  createdAt: string;
+}
+
+export interface RankingEntry {
+  modelRegistryId: string;
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  score: number;
+  rank: number;
+  metric: string;
 }

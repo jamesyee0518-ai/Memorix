@@ -14,13 +14,13 @@ import { Audio } from "expo-av";
 import * as DocumentPicker from "expo-document-picker";
 import { StatusBar } from "expo-status-bar";
 import NetInfo from "@react-native-community/netinfo";
-import { bindDevice, captureText, captureUpload, captureUrl, deactivateDevice, pairDevice } from "./api/client";
+import { bindDevice, cancelMediaJob, captureText, captureUpload, captureUrl, createMediaJob, deactivateDevice, listMediaJobs, pairDevice, type MediaJob } from "./api/client";
 import { registerPushToken } from "./notifications/registerPushToken";
 import { clearDeviceTokens, setDeviceAccessToken, setDeviceRefreshToken } from "./storage/auth";
 import { getClientId } from "./storage/device";
 import { enqueueCapture, flushQueue, readQueue } from "./storage/offlineQueue";
 
-type Mode = "text" | "url" | "file" | "audio";
+type Mode = "text" | "url" | "file" | "audio" | "media";
 
 export default function App() {
   const [mode, setMode] = useState<Mode>("text");
@@ -32,12 +32,16 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [mediaPrompt, setMediaPrompt] = useState("");
+  const [mediaJobs, setMediaJobs] = useState<MediaJob[]>([]);
   const [busy, setBusy] = useState(false);
 
   const modeLabel = useMemo(() => {
     if (mode === "text") return "文字";
     if (mode === "url") return "链接";
     if (mode === "audio") return "录音";
+    if (mode === "media") return "媒体";
     return "文件";
   }, [mode]);
 
@@ -55,6 +59,7 @@ export default function App() {
       if (binding?.deviceAccessToken) {
         await setDeviceAccessToken(binding.deviceAccessToken);
         await setDeviceRefreshToken(binding.refreshToken);
+        setWorkspaceId(binding.device.workspaceId);
       }
       await refreshQueue();
       await flushQueue().then(refreshQueue).catch(() => undefined);
@@ -68,10 +73,51 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    if (!workspaceId) return;
+    void refreshMediaJobs();
+    const interval = setInterval(() => { void refreshMediaJobs(); }, 5000);
+    return () => clearInterval(interval);
+  }, [workspaceId]);
+
   async function refreshQueue() {
     const queue = await readQueue();
     setPendingCount(queue.length);
     setFailedCount(queue.filter((item) => item.attempts > 0).length);
+  }
+
+  async function refreshMediaJobs() {
+    if (!workspaceId) return;
+    const jobs = await listMediaJobs(workspaceId).catch(() => []);
+    setMediaJobs(jobs);
+  }
+
+  async function submitMediaJob() {
+    const prompt = mediaPrompt.trim();
+    if (!prompt || !workspaceId) return;
+    setBusy(true);
+    try {
+      await createMediaJob({ workspaceId, prompt });
+      setMediaPrompt("");
+      await refreshMediaJobs();
+      Alert.alert("任务已创建", "将在已配置的本地媒体运行器上执行。");
+    } catch (error) {
+      Alert.alert("创建失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelMedia(id: string) {
+    setBusy(true);
+    try {
+      await cancelMediaJob(id);
+      await refreshMediaJobs();
+    } catch (error) {
+      Alert.alert("取消失败", error instanceof Error ? error.message : "请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submitText() {
@@ -225,14 +271,14 @@ export default function App() {
         </View>
 
         <View style={styles.segment}>
-          {(["text", "url", "file", "audio"] as Mode[]).map((item) => (
+          {(["text", "url", "file", "audio", "media"] as Mode[]).map((item) => (
             <Pressable
               key={item}
               style={[styles.segmentButton, mode === item && styles.segmentButtonActive]}
               onPress={() => setMode(item)}
             >
               <Text style={[styles.segmentText, mode === item && styles.segmentTextActive]}>
-                {item === "text" ? "文字" : item === "url" ? "链接" : item === "audio" ? "录音" : "文件"}
+                {item === "text" ? "文字" : item === "url" ? "链接" : item === "audio" ? "录音" : item === "media" ? "媒体" : "文件"}
               </Text>
             </Pressable>
           ))}
@@ -289,7 +335,30 @@ export default function App() {
               <Text style={styles.primaryText}>{recording ? "停止并发送" : "开始录音"}</Text>
             </Pressable>
           )}
+          {mode === "media" && (
+            <>
+              <Text style={styles.hint}>本地优先 · 5 秒 · 16 步。手机仅创建和查看任务，不运行模型或传输参考素材。</Text>
+              <TextInput
+                value={mediaPrompt}
+                onChangeText={setMediaPrompt}
+                multiline
+                placeholder="描述要生成的视频"
+                placeholderTextColor="#7b8496"
+                style={[styles.input, styles.textArea]}
+              />
+              <Pressable disabled={busy || !workspaceId || !mediaPrompt.trim()} style={styles.primaryButton} onPress={submitMediaJob}>
+                <Text style={styles.primaryText}>创建媒体任务</Text>
+              </Pressable>
+            </>
+          )}
         </View>
+        {mode === "media" && <View style={styles.panel}>
+          <Text style={styles.panelTitle}>媒体任务</Text>
+          {mediaJobs.length === 0 ? <Text style={styles.hint}>暂无媒体任务</Text> : mediaJobs.slice(0, 10).map((job) => <View key={job.id} style={styles.mediaJob}>
+            <View style={styles.mediaJobCopy}><Text style={styles.mediaJobTitle}>视频生成 · {job.status}</Text><Text style={styles.hint} numberOfLines={1}>{job.errorMessage ?? (job.status === "completed" ? "已生成，等待受控归档" : "本地优先执行")}</Text></View>
+            {["queued", "leased", "running", "uploading"].includes(job.status) && <Pressable disabled={busy} onPress={() => cancelMedia(job.id)}><Text style={styles.dangerText}>取消</Text></Pressable>}
+          </View>)}
+        </View>}
         </ScrollView>
 
         <View style={styles.footer}>
@@ -336,6 +405,10 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
     marginTop: 4,
   },
+  hint: { color: "#94a3b8", fontSize: 13, lineHeight: 19 },
+  mediaJob: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#334155" },
+  mediaJobCopy: { flex: 1, minWidth: 0 },
+  mediaJobTitle: { color: "#e2e8f0", fontWeight: "600", marginBottom: 3 },
   segment: {
     flexDirection: "row",
     gap: 8,
