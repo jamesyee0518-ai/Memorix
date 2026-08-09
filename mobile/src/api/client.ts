@@ -15,6 +15,18 @@ type ApiEnvelope<T> = {
 
 export type CaptureKind = "text" | "url" | "upload";
 
+export type MediaJob = {
+  id: string;
+  workspaceId: string;
+  capability: string;
+  status: "created" | "quoted" | "queued" | "leased" | "running" | "uploading" | "completed" | "failed" | "cancelled";
+  route: "local_first" | "byok" | "platform_cloud";
+  cancellationRequested: boolean;
+  errorMessage?: string;
+  outputJson?: string;
+  createdAt: string;
+};
+
 export async function apiRequest<T>(
   path: string,
   init: RequestInit = {},
@@ -157,4 +169,28 @@ export function captureUpload(input: {
     method: "POST",
     body: formData,
   });
+}
+
+export function listMediaJobs(workspaceId?: string) {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  return apiRequest<MediaJob[]>(`/media/jobs${query}`);
+}
+
+export function createMediaJob(input: {
+  workspaceId: string;
+  prompt: string;
+}) {
+  return apiRequest<MediaJob>("/media/jobs", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceId: input.workspaceId,
+      capability: "video.generate",
+      routePreference: "local_first",
+      parameters: { prompt: input.prompt, duration: 5, steps: 16, aspect: "16:9" },
+    }),
+  });
+}
+
+export function cancelMediaJob(id: string) {
+  return apiRequest<MediaJob>(`/media/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 }

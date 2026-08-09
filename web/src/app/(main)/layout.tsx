@@ -38,6 +38,19 @@ import {
   ArrowRightLeft,
   FolderGit2,
   History,
+  Clapperboard,
+  Mic,
+  FileClock,
+  AudioLines,
+  Radio,
+  Volume2,
+  Gauge,
+  Database,
+  Store,
+  BookMarked,
+  Wifi,
+  Eye,
+  GitBranch,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
@@ -67,6 +80,8 @@ const navItems = [
   { href: "/knowledge-graph", label: "图谱", icon: Network },
   { href: "/agent-memory", label: "Agent记忆", icon: BrainCircuit },
   { href: "/reports", label: "报告", icon: ClipboardList },
+  { href: "/capture", label: "采集中心", icon: Mic },
+  { href: "/studio", label: "工作室", icon: Clapperboard },
   { href: "/exports", label: "导出", icon: FileDown },
   { href: "/entities", label: "实体", icon: Boxes },
   { href: "/tags", label: "标签", icon: Tag },
@@ -75,9 +90,29 @@ const navItems = [
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
+const captureSubItems = [
+  { href: "/capture/meetings", label: "会议录制", icon: Mic },
+  { href: "/capture/minutes", label: "会议纪要", icon: FileClock },
+  { href: "/capture/transcribe", label: "音频转写", icon: AudioLines },
+  { href: "/capture/streaming", label: "流式转写", icon: Radio },
+  { href: "/capture/voice-qa", label: "语音问答", icon: MessageCircle },
+];
+
+const studioSubItems = [
+  { href: "/studio/tts", label: "TTS 合成", icon: Volume2 },
+  { href: "/studio/benchmark", label: "基准测试", icon: Gauge },
+];
+
 const settingsSubItems = [
   { href: "/settings/workspace", label: "工作区", icon: Layers },
   { href: "/settings/model-config", label: "模型配置", icon: Cpu },
+  { href: "/settings/model-registry", label: "模型注册表", icon: Database },
+  { href: "/settings/byok", label: "BYOK 凭证", icon: KeyRound },
+  { href: "/settings/prompts", label: "Prompt 模板", icon: BookMarked },
+  { href: "/settings/marketplace", label: "市场", icon: Store },
+  { href: "/settings/correction-dict", label: "纠错词典", icon: Languages },
+  { href: "/settings/lan-nodes", label: "LAN 节点", icon: Wifi },
+  { href: "/settings/task-monitor", label: "任务监控", icon: Activity, adminOnly: true },
   { href: "/settings/terminology", label: "术语库", icon: Languages },
   { href: "/settings/runtime", label: "运行时状态", icon: Activity, adminOnly: true },
   { href: "/settings/api-keys", label: "API Key", icon: KeyRound },
@@ -88,6 +123,9 @@ const settingsSubItems = [
 const agentMemorySubItems = [
   { href: "/agent-memory", label: "会话", icon: BrainCircuit },
   { href: "/agent-memory/candidates", label: "候选审核", icon: History },
+  { href: "/agent-memory/evidence", label: "证据视图", icon: Eye },
+  { href: "/agent-memory/checkpoints", label: "检查点", icon: GitBranch },
+  { href: "/agent-memory/access-logs", label: "访问日志", icon: Activity },
   { href: "/agent-memory/handoffs", label: "交接看板", icon: ArrowRightLeft },
   { href: "/agent-memory/projects", label: "Project 归并", icon: FolderGit2 },
   { href: "/agent-memory/archive", label: "归档", icon: FileDown },
@@ -471,6 +509,10 @@ export default function AppLayout({
             const settingsActive = isSettings && active;
             const isAgentMemory = item.href === "/agent-memory";
             const agentMemoryActive = isAgentMemory && active;
+            const isCapture = item.href === "/capture";
+            const captureActive = isCapture && active;
+            const isStudio = item.href === "/studio";
+            const studioActive = isStudio && active;
             return (
               <div key={item.href}>
                 <Link
@@ -513,6 +555,54 @@ export default function AppLayout({
                 {isAgentMemory && agentMemoryActive && (
                   <div className="ml-6 mt-1 space-y-0.5 border-l border-white/20 pl-3">
                     {agentMemorySubItems.map((sub) => {
+                      const SubIcon = sub.icon;
+                      const subActive = pathname === sub.href;
+                      return (
+                        <Link
+                          key={sub.href}
+                          href={sub.href}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                            subActive
+                              ? "bg-white/10 text-cyan-200"
+                              : "text-white/50 hover:bg-white/10 hover:text-white/80"
+                          )}
+                        >
+                          <SubIcon className="size-3.5" />
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* 采集中心子菜单 */}
+                {isCapture && captureActive && (
+                  <div className="ml-6 mt-1 space-y-0.5 border-l border-white/20 pl-3">
+                    {captureSubItems.map((sub) => {
+                      const SubIcon = sub.icon;
+                      const subActive = pathname === sub.href;
+                      return (
+                        <Link
+                          key={sub.href}
+                          href={sub.href}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                            subActive
+                              ? "bg-white/10 text-cyan-200"
+                              : "text-white/50 hover:bg-white/10 hover:text-white/80"
+                          )}
+                        >
+                          <SubIcon className="size-3.5" />
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* 工作室子菜单 */}
+                {isStudio && studioActive && (
+                  <div className="ml-6 mt-1 space-y-0.5 border-l border-white/20 pl-3">
+                    {studioSubItems.map((sub) => {
                       const SubIcon = sub.icon;
                       const subActive = pathname === sub.href;
                       return (

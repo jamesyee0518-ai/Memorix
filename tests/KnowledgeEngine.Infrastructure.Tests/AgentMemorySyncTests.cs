@@ -328,7 +328,7 @@ public class AgentMemorySyncTests
             db, new FakeEmbeddingService(), NullLogger<MemoryEmbeddingService>.Instance);
         var retentionService = new RetentionService(db, NullLogger<RetentionService>.Instance);
         var maintenance = new BackgroundMaintenanceService(
-            db, retentionService, embeddingService, NullLogger<BackgroundMaintenanceService>.Instance);
+            db, retentionService, embeddingService, null!, NullLogger<BackgroundMaintenanceService>.Instance);
 
         var report = await maintenance.RunMaintenanceCycleAsync();
 
@@ -406,7 +406,7 @@ public class AgentMemorySyncTests
             db, new FakeEmbeddingService(), NullLogger<MemoryEmbeddingService>.Instance);
         var retentionService = new RetentionService(db, NullLogger<RetentionService>.Instance);
         var maintenance = new BackgroundMaintenanceService(
-            db, retentionService, embeddingService, NullLogger<BackgroundMaintenanceService>.Instance);
+            db, retentionService, embeddingService, null!, NullLogger<BackgroundMaintenanceService>.Instance);
 
         var report = await maintenance.RunMaintenanceCycleAsync();
 
@@ -470,7 +470,7 @@ public class AgentMemorySyncTests
             db, new FakeEmbeddingService(), NullLogger<MemoryEmbeddingService>.Instance);
         var retentionService = new RetentionService(db, NullLogger<RetentionService>.Instance);
         var maintenance = new BackgroundMaintenanceService(
-            db, retentionService, embeddingService, NullLogger<BackgroundMaintenanceService>.Instance);
+            db, retentionService, embeddingService, null!, NullLogger<BackgroundMaintenanceService>.Instance);
 
         var report = await maintenance.RunMaintenanceCycleAsync();
 

@@ -23,7 +23,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { TranscriptionHubClient } from "../api/websocket";
+import { TranscriptionHubClient } from "../../api/websocket";
 import type {
   AsrSegment,
   HubErrorEvent,
@@ -31,7 +31,7 @@ import type {
   SessionStartedEvent,
   StartSessionRequest,
   TranscriptionCompleteEvent,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

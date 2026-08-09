@@ -88,7 +88,7 @@ function itemTitle(item: InboxItem) {
   );
 }
 
-export default function CaptureStatusPage() {
+export default function QuickCaptureStatusPage() {
   const [clientId, setClientId] = useState<string | undefined>();
   const [items, setItems] = useState<InboxItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,7 +154,7 @@ export default function CaptureStatusPage() {
             variant="outline"
             size="sm"
             className="border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800"
-            render={<Link href="/capture" />}
+            render={<Link href="/quick-capture" />}
           >
             <ArrowLeft className="mr-1.5 size-3.5" />
             返回
@@ -220,7 +220,7 @@ export default function CaptureStatusPage() {
                 <p className="mt-1 text-xs text-slate-500">
                   从手机发送文本、链接或文件后会显示在这里
                 </p>
-                <Button className="mt-4" render={<Link href="/capture" />}>
+                <Button className="mt-4" render={<Link href="/quick-capture" />}>
                   去采集
                 </Button>
               </div>

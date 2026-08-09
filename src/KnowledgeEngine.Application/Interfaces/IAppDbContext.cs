@@ -29,6 +29,7 @@ public interface IAppDbContext
     DbSet<DocumentEntity> DocumentEntities { get; }
     DbSet<EntityRelation> EntityRelations { get; }
     DbSet<AiJob> AiJobs { get; }
+    DbSet<MediaJob> MediaJobs { get; }
 
     // Phase 3 entities
     DbSet<SearchLog> SearchLogs { get; }

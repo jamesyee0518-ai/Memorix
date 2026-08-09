@@ -1,17 +1,28 @@
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 #[cfg(all(not(debug_assertions), target_os = "windows"))]
 use std::os::windows::process::CommandExt;
 use std::process::Child;
 #[cfg(not(debug_assertions))]
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 #[cfg(not(debug_assertions))]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::Manager;
 
 #[allow(dead_code)]
 struct Sidecars {
     api: Option<Child>,
     web: Option<Child>,
+}
+
+#[derive(serde::Serialize)]
+struct MediaRunnerStatus {
+    configured: bool,
+    reachable: bool,
+    endpoint: String,
+    detail: String,
 }
 
 impl Drop for Sidecars {
@@ -32,6 +43,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_directory,
             open_external_url,
+            media_runner_status,
             prepare_update_install,
             resume_after_update_failure
         ])
@@ -86,6 +98,73 @@ pub fn run() {
             stop_sidecars(app_handle);
         }
     });
+}
+
+/// Checks only a loopback media runner.  The desktop shell never executes a
+/// configured command or exposes the runner to the network.
+#[tauri::command]
+fn media_runner_status() -> Result<MediaRunnerStatus, String> {
+    let endpoint = std::env::var("MEMORIX_MEDIA_RUNNER_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8091".to_string());
+    let (host, port) = parse_loopback_endpoint(&endpoint)?;
+    let address = SocketAddr::new(host.parse().map_err(|_| "媒体运行器地址无效")?, port);
+    let timeout = Duration::from_secs(2);
+    let mut stream = match TcpStream::connect_timeout(&address, timeout) {
+        Ok(stream) => stream,
+        Err(error) => {
+            return Ok(MediaRunnerStatus {
+                configured: true,
+                reachable: false,
+                endpoint,
+                detail: format!("本地运行器不可达: {error}"),
+            })
+        }
+    };
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+    stream
+        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .map_err(|error| format!("无法请求本地运行器: {error}"))?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("无法读取本地运行器响应: {error}"))?;
+    let reachable = response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200");
+    Ok(MediaRunnerStatus {
+        configured: true,
+        reachable,
+        endpoint,
+        detail: if reachable {
+            "本地媒体运行器已就绪".to_string()
+        } else {
+            "本地运行器健康检查未通过".to_string()
+        },
+    })
+}
+
+fn parse_loopback_endpoint(endpoint: &str) -> Result<(&str, u16), String> {
+    let without_scheme = endpoint
+        .strip_prefix("http://")
+        .ok_or("本地运行器必须使用 http://127.0.0.1 回环地址")?;
+    let authority = without_scheme
+        .split('/')
+        .next()
+        .ok_or("媒体运行器地址无效")?;
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or("媒体运行器地址必须包含端口")?;
+    if host != "127.0.0.1" && host != "localhost" {
+        return Err("媒体运行器只允许回环地址".to_string());
+    }
+    Ok((
+        if host == "localhost" {
+            "127.0.0.1"
+        } else {
+            host
+        },
+        port.parse().map_err(|_| "媒体运行器端口无效")?,
+    ))
 }
 
 fn stop_sidecars(app: &tauri::AppHandle) {

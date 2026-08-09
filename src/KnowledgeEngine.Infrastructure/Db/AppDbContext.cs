@@ -36,6 +36,7 @@ public partial class AppDbContext : DbContext, IAppDbContext
     public DbSet<DocumentEntity> DocumentEntities => Set<DocumentEntity>();
     public DbSet<EntityRelation> EntityRelations => Set<EntityRelation>();
     public DbSet<AiJob> AiJobs => Set<AiJob>();
+    public DbSet<MediaJob> MediaJobs => Set<MediaJob>();
 
     // Phase 3 entities
     public DbSet<SearchLog> SearchLogs => Set<SearchLog>();
@@ -187,6 +188,7 @@ public partial class AppDbContext : DbContext, IAppDbContext
         ConfigureDocumentEntity(modelBuilder);
         ConfigureEntityRelation(modelBuilder);
         ConfigureAiJob(modelBuilder);
+        ConfigureMediaJob(modelBuilder);
 
         // Phase 3 configurations
         ConfigureSearchLog(modelBuilder);

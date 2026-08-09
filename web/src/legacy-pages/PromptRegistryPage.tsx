@@ -26,7 +26,7 @@ import {
   listPrompts,
   listTests,
   publishPrompt,
-} from "../api/audioClient";
+} from "../../api/audioClient";
 import {
   PromptABTestStatuses,
   PromptRegistryStatuses,
@@ -34,7 +34,7 @@ import {
   type CreatePromptRequest,
   type PromptABTest,
   type PromptRegistry,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

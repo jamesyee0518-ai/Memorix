@@ -21,12 +21,12 @@ import {
   installEntry,
   listEntries,
   uninstallEntry,
-} from "../api/audioClient";
+} from "../../api/audioClient";
 import {
   AudioCapabilities,
   ExecutionModes,
   type ProviderMarketplaceEntry,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

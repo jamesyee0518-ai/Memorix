@@ -146,6 +146,39 @@ import type {
   IngestResult,
   AgentMemoryTurn,
   Project,
+  MeetingDto,
+  MeetingSpeaker,
+  MeetingMinutes,
+  MeetingActionItem,
+  RecordingSession,
+  MeetingAsset,
+  TranscriptDto,
+  TranscriptSegment,
+  ProcessingTaskStatus,
+  AudioAssetDto,
+  AudioUploadResponse,
+  TranscriptionJobDto,
+  TranscriptionSegmentDto,
+  TranscriptionStatusResponse,
+  AsrProviderDescriptor,
+  TtsResult,
+  TtsProviderDescriptor,
+  VoiceProfile,
+  ProviderHealth,
+  ModelRegistry,
+  RegisterModelRequest,
+  CredentialDto,
+  StoreCredentialRequest,
+  PromptRegistry,
+  CreatePromptRequest,
+  CorrectionDictionaryDto,
+  AddCorrectionEntryRequest,
+  CorrectionResult,
+  LanNode,
+  RegisterLanNodeRequest,
+  ProviderMarketplaceEntry,
+  BenchmarkResult,
+  RankingEntry,
 } from "./types";
 
 const currentPort =
@@ -1487,6 +1520,50 @@ export const workspaceApi = {
   },
 };
 
+// ===== 媒体创作任务 API =====
+
+export type MediaRoutePreference = "local_first" | "byok" | "platform_cloud";
+
+export interface MediaJob {
+  id: string;
+  billingJobId?: string;
+  /** Executor-provided artifact metadata. No media bytes or storage URL are exposed here. */
+  outputJson?: string;
+  workspaceId: string;
+  capability: string;
+  status: "created" | "quoted" | "queued" | "leased" | "running" | "uploading" | "completed" | "failed" | "cancelled";
+  route: MediaRoutePreference;
+  cancellationRequested: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface CreateMediaJobInput {
+  workspaceId: string;
+  capability: string;
+  routePreference?: MediaRoutePreference;
+  parameters: Record<string, unknown>;
+  inputAssetIds?: string[];
+}
+
+export const mediaJobApi = {
+  create(data: CreateMediaJobInput): Promise<MediaJob> {
+    return request<MediaJob>({ method: "POST", url: "/media/jobs", data });
+  },
+  list(workspaceId?: string): Promise<MediaJob[]> {
+    return request<MediaJob[]>({ method: "GET", url: "/media/jobs", params: workspaceId ? { workspaceId } : undefined });
+  },
+  cancel(id: string): Promise<MediaJob> {
+    return request<MediaJob>({ method: "POST", url: `/media/jobs/${id}/cancel` });
+  },
+  retry(id: string): Promise<MediaJob> {
+    return request<MediaJob>({ method: "POST", url: `/media/jobs/${id}/retry` });
+  },
+};
+
 // ===== 桌面运行能力 API =====
 
 export const desktopRuntimeApi = {
@@ -2370,5 +2447,390 @@ export const agentMemoryApi = {
       method: "GET",
       url: "/agent-memory/projects",
     });
+  },
+};
+
+// ===== Meeting API =====
+
+export const meetingApi = {
+  list: async (params?: { workspaceId?: string; limit?: number; offset?: number }): Promise<MeetingDto[]> => {
+    return request<MeetingDto[]>({ method: "GET", url: "/v1/meetings", params });
+  },
+
+  get: async (meetingId: string): Promise<MeetingDto> => {
+    return request<MeetingDto>({ method: "GET", url: `/v1/meetings/${meetingId}` });
+  },
+
+  create: async (data: { title: string; description?: string }): Promise<MeetingDto> => {
+    return request<MeetingDto>({ method: "POST", url: "/v1/meetings", data });
+  },
+
+  update: async (meetingId: string, data: { title?: string; description?: string }): Promise<MeetingDto> => {
+    return request<MeetingDto>({ method: "PATCH", url: `/v1/meetings/${meetingId}`, data });
+  },
+
+  finish: async (meetingId: string): Promise<void> => {
+    return request<void>({ method: "POST", url: `/v1/meetings/${meetingId}/finish` });
+  },
+
+  delete: async (meetingId: string): Promise<void> => {
+    return request<void>({ method: "DELETE", url: `/v1/meetings/${meetingId}` });
+  },
+
+  // Speakers
+  getSpeakers: async (meetingId: string): Promise<MeetingSpeaker[]> => {
+    return request<MeetingSpeaker[]>({ method: "GET", url: `/v1/meetings/${meetingId}/speakers` });
+  },
+
+  updateSpeaker: async (meetingId: string, speakerId: string, data: { displayName?: string; identityStatus?: string }): Promise<MeetingSpeaker> => {
+    return request<MeetingSpeaker>({ method: "PATCH", url: `/v1/meetings/${meetingId}/speakers/${speakerId}`, data });
+  },
+
+  // Recording
+  startRecording: async (meetingId: string, data?: { title?: string }): Promise<RecordingSession> => {
+    return request<RecordingSession>({ method: "POST", url: `/v1/meetings/${meetingId}/recording/start`, data: data ?? {} });
+  },
+
+  pauseRecording: async (meetingId: string): Promise<RecordingSession> => {
+    return request<RecordingSession>({ method: "POST", url: `/v1/meetings/${meetingId}/recording/pause` });
+  },
+
+  resumeRecording: async (meetingId: string): Promise<RecordingSession> => {
+    return request<RecordingSession>({ method: "POST", url: `/v1/meetings/${meetingId}/recording/resume` });
+  },
+
+  stopRecording: async (meetingId: string): Promise<RecordingSession> => {
+    return request<RecordingSession>({ method: "POST", url: `/v1/meetings/${meetingId}/recording/stop` });
+  },
+
+  getRecordingStatus: async (meetingId: string): Promise<RecordingSession | null> => {
+    return request<RecordingSession | null>({ method: "GET", url: `/v1/meetings/${meetingId}/recording/status` });
+  },
+
+  // Assets
+  getAssets: async (meetingId: string): Promise<MeetingAsset[]> => {
+    return request<MeetingAsset[]>({ method: "GET", url: `/v1/meetings/${meetingId}/assets` });
+  },
+
+  uploadAsset: async (meetingId: string, file: File): Promise<MeetingAsset> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return request<MeetingAsset>({
+      method: "POST",
+      url: `/v1/meetings/${meetingId}/assets`,
+      data: formData,
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+
+  // Minutes
+  getMinutes: async (meetingId: string): Promise<MeetingMinutes[]> => {
+    return request<MeetingMinutes[]>({ method: "GET", url: `/v1/meetings/${meetingId}/minutes` });
+  },
+
+  generateMinutes: async (meetingId: string, data?: { language?: string; style?: string }): Promise<MeetingMinutes> => {
+    return request<MeetingMinutes>({ method: "POST", url: `/v1/meetings/${meetingId}/minutes/generate`, data: data ?? {} });
+  },
+
+  setOfficialMinutes: async (meetingId: string, minutesId: string): Promise<MeetingMinutes> => {
+    return request<MeetingMinutes>({ method: "POST", url: `/v1/meetings/${meetingId}/minutes/${minutesId}/set-official` });
+  },
+
+  publishMinutes: async (meetingId: string, minutesId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/v1/meetings/${meetingId}/minutes/${minutesId}/publish` });
+  },
+
+  publishAll: async (meetingId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/v1/meetings/${meetingId}/publish` });
+  },
+
+  // Action items
+  getActionItems: async (meetingId: string): Promise<MeetingActionItem[]> => {
+    return request<MeetingActionItem[]>({ method: "GET", url: `/v1/meetings/${meetingId}/action-items` });
+  },
+
+  confirmActionItem: async (actionItemId: string, data: { action: string; note?: string }): Promise<MeetingActionItem> => {
+    return request<MeetingActionItem>({ method: "POST", url: `/v1/meetings/action-items/${actionItemId}/confirm`, data });
+  },
+
+  // Transcripts
+  getTranscripts: async (meetingId: string): Promise<TranscriptDto[]> => {
+    return request<TranscriptDto[]>({ method: "GET", url: `/v1/meetings/${meetingId}/transcripts` });
+  },
+
+  getTranscript: async (transcriptId: string): Promise<{ segments: TranscriptSegment[] } & TranscriptDto> => {
+    return request({ method: "GET", url: `/v1/transcripts/${transcriptId}` });
+  },
+
+  setOfficialTranscript: async (meetingId: string, transcriptId: string): Promise<void> => {
+    return request<void>({ method: "POST", url: `/v1/meetings/${meetingId}/transcripts/${transcriptId}/set-official` });
+  },
+
+  // Processing pipeline
+  getProcessingStatus: async (meetingId: string): Promise<unknown> => {
+    return request({ method: "GET", url: `/v1/meetings/${meetingId}/processing/status` });
+  },
+
+  getProcessingTasks: async (meetingId: string): Promise<ProcessingTaskStatus[]> => {
+    return request<ProcessingTaskStatus[]>({ method: "GET", url: `/v1/meetings/${meetingId}/processing/tasks` });
+  },
+
+  retryProcessingTask: async (taskId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/v1/meetings/processing/tasks/${taskId}/retry` });
+  },
+};
+
+// ===== Audio / Transcription API =====
+
+export const audioApi = {
+  upload: async (file: File, params?: {
+    title?: string;
+    topicId?: string;
+    language?: string;
+    enableVad?: boolean;
+    enableSpeakerDiarization?: boolean;
+    enablePunctuation?: boolean;
+    autoStart?: boolean;
+  }): Promise<AudioUploadResponse> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (params?.title) formData.append("title", params.title);
+    if (params?.topicId) formData.append("topicId", params.topicId);
+    if (params?.language) formData.append("language", params.language);
+    formData.append("enableVad", String(params?.enableVad ?? true));
+    formData.append("enableSpeakerDiarization", String(params?.enableSpeakerDiarization ?? false));
+    formData.append("enablePunctuation", String(params?.enablePunctuation ?? true));
+    formData.append("autoStart", String(params?.autoStart ?? true));
+    return request<AudioUploadResponse>({
+      method: "POST",
+      url: "/audio/upload",
+      data: formData,
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+  },
+
+  getAsset: async (assetId: string): Promise<AudioAssetDto> => {
+    return request<AudioAssetDto>({ method: "GET", url: `/audio/assets/${assetId}` });
+  },
+
+  listAssets: async (params?: { limit?: number; offset?: number }): Promise<AudioAssetDto[]> => {
+    return request<AudioAssetDto[]>({ method: "GET", url: "/audio/assets", params });
+  },
+};
+
+export const transcriptionApi = {
+  listJobs: async (params?: { status?: string; limit?: number; offset?: number }): Promise<TranscriptionJobDto[]> => {
+    return request<TranscriptionJobDto[]>({ method: "GET", url: "/transcription/jobs", params });
+  },
+
+  getJob: async (jobId: string): Promise<TranscriptionStatusResponse> => {
+    return request<TranscriptionStatusResponse>({ method: "GET", url: `/transcription/jobs/${jobId}` });
+  },
+
+  cancelJob: async (jobId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/transcription/jobs/${jobId}/cancel` });
+  },
+
+  getSegments: async (jobId: string): Promise<TranscriptionSegmentDto[]> => {
+    return request<TranscriptionSegmentDto[]>({ method: "GET", url: `/transcription/jobs/${jobId}/segments` });
+  },
+
+  editSegment: async (segmentId: string, text: string): Promise<unknown> => {
+    return request({ method: "PUT", url: `/transcription/segments/${segmentId}`, data: { text } });
+  },
+
+  mergeSegment: async (segmentId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/transcription/segments/${segmentId}/merge` });
+  },
+
+  mergeAllSegments: async (jobId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/transcription/jobs/${jobId}/merge-all` });
+  },
+
+  listProviders: async (): Promise<AsrProviderDescriptor[]> => {
+    return request<AsrProviderDescriptor[]>({ method: "GET", url: "/transcription/providers" });
+  },
+};
+
+// ===== TTS API =====
+
+export const ttsApi = {
+  synthesize: async (data: {
+    text: string;
+    voiceId?: string;
+    language?: string;
+    speed?: number;
+    pitch?: number;
+    preferredProviderId?: string;
+  }): Promise<TtsResult> => {
+    return request<TtsResult>({ method: "POST", url: "/tts/synthesize", data });
+  },
+
+  listProviders: async (): Promise<TtsProviderDescriptor[]> => {
+    return request<TtsProviderDescriptor[]>({ method: "GET", url: "/tts/providers" });
+  },
+
+  listVoices: async (providerId?: string): Promise<VoiceProfile[]> => {
+    return request<VoiceProfile[]>({ method: "GET", url: "/tts/voices", params: providerId ? { providerId } : undefined });
+  },
+
+  preview: async (data: {
+    text: string;
+    voiceId?: string;
+    preferredProviderId?: string;
+  }): Promise<TtsResult> => {
+    return request<TtsResult>({ method: "POST", url: "/tts/preview", data });
+  },
+
+  healthCheck: async (providerId: string): Promise<ProviderHealth> => {
+    return request<ProviderHealth>({ method: "GET", url: `/tts/health/${providerId}` });
+  },
+};
+
+// ===== Model Registry API =====
+
+export const modelRegistryApi = {
+  list: async (params?: { capability?: string; providerId?: string; enabledOnly?: boolean }): Promise<ModelRegistry[]> => {
+    return request<ModelRegistry[]>({ method: "GET", url: "/audio/models", params });
+  },
+
+  get: async (id: string): Promise<ModelRegistry> => {
+    return request<ModelRegistry>({ method: "GET", url: `/audio/models/${id}` });
+  },
+
+  register: async (data: RegisterModelRequest): Promise<ModelRegistry> => {
+    return request<ModelRegistry>({ method: "POST", url: "/audio/models", data });
+  },
+
+  update: async (id: string, data: RegisterModelRequest): Promise<ModelRegistry> => {
+    return request<ModelRegistry>({ method: "PUT", url: `/audio/models/${id}`, data });
+  },
+
+  disable: async (id: string): Promise<unknown> => {
+    return request({ method: "DELETE", url: `/audio/models/${id}` });
+  },
+};
+
+// ===== Provider Credentials (BYOK) API =====
+
+export const providerCredentialApi = {
+  list: async (): Promise<CredentialDto[]> => {
+    return request<CredentialDto[]>({ method: "GET", url: "/provider-credentials" });
+  },
+
+  store: async (data: StoreCredentialRequest): Promise<CredentialDto> => {
+    return request<CredentialDto>({ method: "POST", url: "/provider-credentials", data });
+  },
+
+  verify: async (credentialId: string): Promise<{ credentialId: string; valid: boolean }> => {
+    return request({ method: "POST", url: `/provider-credentials/${credentialId}/verify` });
+  },
+
+  disable: async (credentialId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/provider-credentials/${credentialId}/disable` });
+  },
+
+  rotate: async (credentialId: string): Promise<unknown> => {
+    return request({ method: "POST", url: `/provider-credentials/${credentialId}/rotate` });
+  },
+};
+
+// ===== Prompt Registry API =====
+
+export const promptRegistryApi = {
+  getActive: async (key: string, language?: string): Promise<PromptRegistry> => {
+    return request<PromptRegistry>({ method: "GET", url: `/prompts/${key}/active`, params: language ? { language } : undefined });
+  },
+
+  listVersions: async (key: string): Promise<PromptRegistry[]> => {
+    return request<PromptRegistry[]>({ method: "GET", url: `/prompts/${key}/versions` });
+  },
+
+  create: async (data: CreatePromptRequest): Promise<PromptRegistry> => {
+    return request<PromptRegistry>({ method: "POST", url: "/prompts", data });
+  },
+
+  publish: async (id: string): Promise<PromptRegistry> => {
+    return request<PromptRegistry>({ method: "POST", url: `/prompts/${id}/publish` });
+  },
+
+  archive: async (id: string): Promise<PromptRegistry> => {
+    return request<PromptRegistry>({ method: "POST", url: `/prompts/${id}/archive` });
+  },
+};
+
+// ===== Correction Dictionary API =====
+
+export const correctionApi = {
+  correct: async (data: { text: string; workspaceId?: string }): Promise<CorrectionResult> => {
+    return request<CorrectionResult>({ method: "POST", url: "/correction/correct", data });
+  },
+
+  listEntries: async (params?: { workspaceId?: string; category?: string }): Promise<CorrectionDictionaryDto[]> => {
+    return request<CorrectionDictionaryDto[]>({ method: "GET", url: "/correction/dictionary", params });
+  },
+
+  addEntry: async (data: AddCorrectionEntryRequest): Promise<CorrectionDictionaryDto> => {
+    return request<CorrectionDictionaryDto>({ method: "POST", url: "/correction/dictionary", data });
+  },
+
+  deleteEntry: async (id: string): Promise<unknown> => {
+    return request({ method: "DELETE", url: `/correction/dictionary/${id}` });
+  },
+};
+
+// ===== LAN Nodes API =====
+
+export const lanNodeApi = {
+  list: async (): Promise<LanNode[]> => {
+    return request<LanNode[]>({ method: "GET", url: "/audio/lan-nodes" });
+  },
+
+  discover: async (): Promise<LanNode[]> => {
+    return request<LanNode[]>({ method: "POST", url: "/audio/lan-nodes/discover" });
+  },
+
+  register: async (data: RegisterLanNodeRequest): Promise<LanNode> => {
+    return request<LanNode>({ method: "POST", url: "/audio/lan-nodes/register", data });
+  },
+
+  unregister: async (id: string): Promise<unknown> => {
+    return request({ method: "DELETE", url: `/audio/lan-nodes/${id}` });
+  },
+};
+
+// ===== Marketplace API =====
+
+export const marketplaceApi = {
+  browse: async (params?: { capability?: string; providerId?: string }): Promise<ProviderMarketplaceEntry[]> => {
+    return request<ProviderMarketplaceEntry[]>({ method: "GET", url: "/audio/marketplace", params });
+  },
+
+  install: async (id: string): Promise<ProviderMarketplaceEntry> => {
+    return request<ProviderMarketplaceEntry>({ method: "POST", url: `/audio/marketplace/${id}/install` });
+  },
+
+  uninstall: async (id: string): Promise<unknown> => {
+    return request({ method: "DELETE", url: `/audio/marketplace/${id}/install` });
+  },
+
+  rate: async (id: string, rating: number): Promise<unknown> => {
+    return request({ method: "POST", url: `/audio/marketplace/${id}/rate`, data: { rating } });
+  },
+};
+
+// ===== Benchmark API =====
+
+export const benchmarkApi = {
+  run: async (modelRegistryId: string, datasetName?: string): Promise<BenchmarkResult> => {
+    return request<BenchmarkResult>({ method: "POST", url: "/audio/benchmark/run", data: { modelRegistryId, datasetName } });
+  },
+
+  getResults: async (params?: { modelRegistryId?: string; benchmarkName?: string }): Promise<BenchmarkResult[]> => {
+    return request<BenchmarkResult[]>({ method: "GET", url: "/audio/benchmark/results", params });
+  },
+
+  getRankings: async (category: string): Promise<RankingEntry[]> => {
+    return request<RankingEntry[]>({ method: "GET", url: `/audio/benchmark/rankings/${category}` });
   },
 };

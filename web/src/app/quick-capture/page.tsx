@@ -51,7 +51,7 @@ function formatDate(dateStr?: string) {
   });
 }
 
-export default function CapturePage() {
+export default function QuickCapturePage() {
   const [mode, setMode] = useState<CaptureMode>("text");
   const [topics, setTopics] = useState<Topic[]>([]);
   const [topicId, setTopicId] = useState("none");
@@ -222,7 +222,7 @@ export default function CapturePage() {
             variant="outline"
             size="sm"
             className="border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800"
-            render={<Link href="/capture/status" />}
+            render={<Link href="/quick-capture/status" />}
           >
             状态
           </Button>
@@ -321,7 +321,7 @@ export default function CapturePage() {
                     value={urlTitle}
                     onChange={(e) => setUrlTitle(e.target.value)}
                     placeholder="可选"
-                    className="border-slate-700 bg-slate-950 text-slate-100 placeholder:text-slate-500"
+                    className="border-slate-700 bg-slate-950 text-base text-slate-100 placeholder:text-slate-500"
                   />
                 </div>
               </div>
@@ -390,7 +390,7 @@ export default function CapturePage() {
             <Button
               variant="ghost"
               className="h-10 w-full text-slate-300 hover:bg-slate-800 hover:text-white"
-              render={<Link href="/capture/status" />}
+              render={<Link href="/quick-capture/status" />}
             >
               查看采集状态
             </Button>

@@ -17,12 +17,12 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { getRankings, listResults } from "../api/audioClient";
+import { getRankings, listResults } from "../../api/audioClient";
 import {
   BenchmarkRankings,
   type BenchmarkResult,
   type RankingEntry,
-} from "../types/audio";
+} from "../../types/audio";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

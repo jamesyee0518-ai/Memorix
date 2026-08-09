@@ -145,11 +145,8 @@ export class TranscriptionHubClient {
    */
   private static async tryLoadSignalR(): Promise<SignalRModule | null> {
     try {
-      // Use dynamic import so the package is only required when actually used.
-      // The @ts-expect-error suppresses the "cannot find module" error at
-      // compile time; at runtime the import either resolves (package installed)
-      // or throws (caught below), triggering the raw WebSocket fallback.
-      // @ts-expect-error - @microsoft/signalr is an optional peer dependency
+      // Use dynamic import so the client is loaded only when actually used.
+      // A network/runtime failure still falls back to the raw WebSocket path.
       const mod = await import("@microsoft/signalr");
       return mod as unknown as SignalRModule;
     } catch {

@@ -9,6 +9,7 @@ using KnowledgeEngine.Infrastructure;
 using KnowledgeEngine.Infrastructure.Db;
 using KnowledgeEngine.Infrastructure.Mcp;
 using KnowledgeEngine.Infrastructure.Reports;
+using KnowledgeEngine.Infrastructure.Runtime;
 using ModelContextProtocol.Server;
 using KnowledgeEngine.Api.Hubs;
 using KnowledgeEngine.Api.Middlewares;
@@ -176,6 +177,7 @@ using (var scope = app.Services.CreateScope())
             .EnsureDefaultsAsync().GetAwaiter().GetResult();
         scope.ServiceProvider.GetRequiredService<IPaymentService>()
             .EnsureDefaultsAsync().GetAwaiter().GetResult();
+        MediaModelSeeder.SeedAsync(db).GetAwaiter().GetResult();
         scope.ServiceProvider.GetRequiredService<IChineseFullTextIndexService>()
             .EnsureCreatedAsync().GetAwaiter().GetResult();
         if (db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
@@ -313,6 +315,7 @@ app.MapControllers();
 app.MapHub<TranscriptionHub>("/hubs/transcription");
 app.MapHub<MeetingHub>("/hubs/meeting");
 app.MapHub<JobProgressHub>("/hubs/job-progress");
+app.MapHub<MediaJobHub>("/hubs/media-jobs");
 app.MapHub<TtsHub>("/hubs/tts");
 
 // Health check

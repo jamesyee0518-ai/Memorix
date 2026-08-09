@@ -187,7 +187,7 @@ export function HybridDataFlowPanel({
       status: "可采集",
       state: workspace ? "ready" : "missing",
       detail: "文本、链接和文件可进入采集入口。",
-      href: "/capture",
+      href: "/quick-capture",
       icon: Smartphone,
     },
     {

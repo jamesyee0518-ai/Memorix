@@ -62,7 +62,7 @@ public class AgentMemoryContractTests
         Guid workspaceId)
     {
         var controller = new AgentMemoryController(
-            mockService.Object, mockUser.Object, null!, null!, null!, null!, null!)
+            mockService.Object, null!, mockUser.Object, null!, null!, null!, null!, null!, null!)
         {
             ControllerContext = CreateControllerContext(workspaceId)
         };
@@ -756,7 +756,7 @@ public class AgentMemoryContractTests
 
         // Controller without workspace_id claim
         var controller = new AgentMemoryController(
-            mockService.Object, mockUser.Object, null!, null!, null!, null!, null!)
+            mockService.Object, null!, mockUser.Object, null!, null!, null!, null!, null!, null!)
         {
             ControllerContext = new ControllerContext
             {
