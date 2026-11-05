@@ -1,6 +1,7 @@
 using KnowledgeEngine.Application.DTOs;
 using KnowledgeEngine.Application.Interfaces;
 using KnowledgeEngine.Application.Services;
+using KnowledgeEngine.Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -79,9 +80,9 @@ public class DocumentsController : BaseController
     [HttpGet("{id:guid}/language")]
     public async Task<IActionResult> GetLanguage([FromRoute] Guid id, CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(item => item.Id == id, ct);
-        if (document == null)
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
+        var (error, owned) = await LoadOwnedDocumentAsync(id, ct);
+        if (error != null) return error;
+        var document = owned!;
 
         return Ok(ApiResponse<object>.Ok(new
         {
@@ -102,11 +103,10 @@ public class DocumentsController : BaseController
         if (string.IsNullOrWhiteSpace(request.PrimaryLanguage) || request.PrimaryLanguage.Length > 20)
             return BadRequest(ApiResponse<object>.FailObject("INVALID_LANGUAGE", "Language must be a valid BCP-47 language code", GetTraceId()));
 
-        var document = await _db.Documents.FirstOrDefaultAsync(item => item.Id == id, ct);
-        if (document == null)
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
+        var (error, document) = await LoadOwnedDocumentAsync(id, ct);
+        if (error != null) return error;
 
-        document.PrimaryLanguage = request.PrimaryLanguage.Trim();
+        document!.PrimaryLanguage = request.PrimaryLanguage.Trim();
         document.Language = document.PrimaryLanguage;
         document.LanguageDistribution = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, double>
         {
@@ -131,10 +131,9 @@ public class DocumentsController : BaseController
         var level = request.Level?.Trim().ToUpperInvariant();
         if (level is not ("L1" or "L2" or "L3"))
             return BadRequest(ApiResponse<object>.FailObject("INVALID_LEVEL", "Localization level must be L1, L2 or L3", GetTraceId()));
-        var document = await _db.Documents.FirstOrDefaultAsync(item => item.Id == id, ct);
-        if (document == null)
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
-        document.LocalizationLevel = level;
+        var (error, document) = await LoadOwnedDocumentAsync(id, ct);
+        if (error != null) return error;
+        document!.LocalizationLevel = level;
         document.LocalizationStrategy = level switch { "L3" => "full", "L2" => "on_demand", _ => "metadata_only" };
         document.LocalizationStatus = "pending";
         document.UpdatedAt = DateTime.UtcNow;
@@ -145,11 +144,10 @@ public class DocumentsController : BaseController
     [HttpPost("{id:guid}/reprocess-language")]
     public async Task<IActionResult> ReprocessLanguage([FromRoute] Guid id, CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(item => item.Id == id, ct);
-        if (document == null)
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
+        var (error, document) = await LoadOwnedDocumentAsync(id, ct);
+        if (error != null) return error;
 
-        var detection = _languageDetection.Detect(document.ContentText ?? document.ContentMarkdown);
+        var detection = _languageDetection.Detect(document!.ContentText ?? document.ContentMarkdown);
         document.PrimaryLanguage = detection.PrimaryLanguage;
         document.Language = detection.PrimaryLanguage;
         document.LanguageDistribution = detection.DistributionJson;
@@ -286,11 +284,8 @@ public class DocumentsController : BaseController
     [HttpGet("{documentId:guid}/chunks")]
     public async Task<IActionResult> GetChunks([FromRoute] Guid documentId, CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == documentId, ct);
-        if (document == null)
-        {
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
-        }
+        var (error, _) = await LoadOwnedDocumentAsync(documentId, ct);
+        if (error != null) return error;
 
         var chunks = await _db.DocumentChunks
             .Where(chunk => chunk.DocumentId == documentId)
@@ -492,17 +487,17 @@ public class DocumentsController : BaseController
     [HttpGet("chunks/{chunkId:guid}")]
     public async Task<IActionResult> GetChunk([FromRoute] Guid chunkId, CancellationToken ct)
     {
-        var chunk = await _db.DocumentChunks.FirstOrDefaultAsync(item => item.Id == chunkId, ct);
-        if (chunk == null)
-        {
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Chunk not found", GetTraceId()));
-        }
-        return Ok(ApiResponse<object>.Ok(chunk, GetTraceId()));
+        var (error, chunk) = await LoadOwnedChunkAsync(chunkId, ct);
+        if (error != null) return error;
+        return Ok(ApiResponse<object>.Ok(chunk!, GetTraceId()));
     }
 
     [HttpGet("chunks/{chunkId:guid}/embedding")]
     public async Task<IActionResult> GetChunkEmbedding([FromRoute] Guid chunkId, CancellationToken ct)
     {
+        var (error, _) = await LoadOwnedChunkAsync(chunkId, ct);
+        if (error != null) return error;
+
         var embedding = await _db.ChunkEmbeddings
             .Where(item => item.ChunkId == chunkId)
             .OrderByDescending(item => item.UpdatedAt)
@@ -551,11 +546,8 @@ public class DocumentsController : BaseController
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == documentId, ct);
-        if (document == null)
-        {
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
-        }
+        var (error, _) = await LoadOwnedDocumentAsync(documentId, ct, workspaceId);
+        if (error != null) return error;
 
         // Run TagWorker to regenerate tags via AI
         await _tagWorker.ProcessDocumentAsync(documentId, ct);
@@ -576,11 +568,8 @@ public class DocumentsController : BaseController
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == documentId, ct);
-        if (document == null)
-        {
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
-        }
+        var (error, _) = await LoadOwnedDocumentAsync(documentId, ct, workspaceId);
+        if (error != null) return error;
 
         // Run EntityWorker to regenerate entities via AI
         await _entityWorker.ProcessDocumentAsync(documentId, ct);
@@ -601,11 +590,8 @@ public class DocumentsController : BaseController
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == documentId, ct);
-        if (document == null)
-        {
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
-        }
+        var (error, document) = await LoadOwnedDocumentAsync(documentId, ct, workspaceId);
+        if (error != null) return error;
 
         // Delete existing document_chunks for the document
         var existingChunks = await _db.DocumentChunks
@@ -617,7 +603,7 @@ public class DocumentsController : BaseController
         }
 
         // Set ChunkStatus = "pending" so ChunkWorker picks it up again
-        document.ChunkStatus = "pending";
+        document!.ChunkStatus = "pending";
         document.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
@@ -638,11 +624,8 @@ public class DocumentsController : BaseController
         [FromRoute] Guid documentId,
         CancellationToken ct)
     {
-        var document = await _db.Documents.FirstOrDefaultAsync(d => d.Id == documentId, ct);
-        if (document == null)
-        {
-            return NotFound(ApiResponse<object>.FailObject("NOT_FOUND", "Document not found", GetTraceId()));
-        }
+        var (error, document) = await LoadOwnedDocumentAsync(documentId, ct, workspaceId);
+        if (error != null) return error;
 
         // Set all document_chunks' EmbeddingStatus = "pending"
         var chunks = await _db.DocumentChunks
@@ -656,7 +639,7 @@ public class DocumentsController : BaseController
             chunk.UpdatedAt = now;
         }
 
-        document.EmbeddingStatus = "processing";
+        document!.EmbeddingStatus = "processing";
         document.IndexStatus = "processing";
         document.UpdatedAt = now;
 
@@ -676,11 +659,97 @@ public class DocumentsController : BaseController
         [FromRoute] Guid workspaceId,
         CancellationToken ct)
     {
+        var denied = await DenyUnlessWorkspaceOwnerAsync(workspaceId, ct);
+        if (denied != null) return denied;
+
         await _vectorStore.RebuildAsync(workspaceId.ToString(), ct);
 
         return Ok(ApiResponse<object>.Ok(
             new { workspaceId, action = "rebuild-index", status = "queued" },
             GetTraceId()));
+    }
+
+    /// <summary>
+    /// Loads a document owned by the current user. Missing and cross-user ids
+    /// both return 404 so existence of another user's document is not revealed.
+    /// </summary>
+    private async Task<(IActionResult? Error, Document? Document)> LoadOwnedDocumentAsync(
+        Guid documentId,
+        CancellationToken ct,
+        Guid? workspaceId = null)
+    {
+        if (_currentUser.UserId is not Guid userId)
+        {
+            return (Unauthorized(ApiResponse<object>.FailObject(
+                "UNAUTHORIZED", "User context is required", GetTraceId())), null);
+        }
+
+        var document = await _db.Documents.FirstOrDefaultAsync(
+            d => d.Id == documentId && d.UserId == userId, ct);
+        if (document == null || (workspaceId.HasValue && document.WorkspaceId != workspaceId))
+        {
+            return (NotFound(ApiResponse<object>.FailObject(
+                "NOT_FOUND", "Document not found", GetTraceId())), null);
+        }
+
+        return (null, document);
+    }
+
+    private async Task<(IActionResult? Error, DocumentChunk? Chunk)> LoadOwnedChunkAsync(
+        Guid chunkId,
+        CancellationToken ct)
+    {
+        if (_currentUser.UserId is not Guid userId)
+        {
+            return (Unauthorized(ApiResponse<object>.FailObject(
+                "UNAUTHORIZED", "User context is required", GetTraceId())), null);
+        }
+
+        var chunk = await _db.DocumentChunks.FirstOrDefaultAsync(item => item.Id == chunkId, ct);
+        if (chunk == null)
+        {
+            return (NotFound(ApiResponse<object>.FailObject(
+                "NOT_FOUND", "Chunk not found", GetTraceId())), null);
+        }
+
+        var owned = await _db.Documents.AnyAsync(
+            d => d.Id == chunk.DocumentId && d.UserId == userId, ct);
+        if (!owned)
+        {
+            return (NotFound(ApiResponse<object>.FailObject(
+                "NOT_FOUND", "Chunk not found", GetTraceId())), null);
+        }
+
+        return (null, chunk);
+    }
+
+    /// <summary>
+    /// Workspace routes follow the existing workspace ACL: 404 when the
+    /// workspace does not exist, 403 when it belongs to someone else.
+    /// </summary>
+    private async Task<IActionResult?> DenyUnlessWorkspaceOwnerAsync(Guid workspaceId, CancellationToken ct)
+    {
+        if (_currentUser.UserId is not Guid userId)
+        {
+            return Unauthorized(ApiResponse<object>.FailObject(
+                "UNAUTHORIZED", "User context is required", GetTraceId()));
+        }
+
+        var workspace = await _db.Workspaces.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == workspaceId, ct);
+        if (workspace == null)
+        {
+            return NotFound(ApiResponse<object>.FailObject(
+                "NOT_FOUND", "Workspace not found", GetTraceId()));
+        }
+
+        if (workspace.UserId != userId)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse<object>.FailObject(
+                "WORKSPACE_FORBIDDEN", "无权访问该工作区", GetTraceId()));
+        }
+
+        return null;
     }
 }
 

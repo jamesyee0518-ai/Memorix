@@ -13,6 +13,8 @@ namespace KnowledgeEngine.Application.Services;
 /// </summary>
 public class MeetingPublishingService : IMeetingPublishingService
 {
+    public static string MeetingResourceUrl(Guid meetingId) => $"memorix-meeting://{meetingId:D}";
+
     private readonly IAppDbContext _db;
     private readonly IKnowledgeRepository _knowledgeRepo;
     private readonly ILogger<MeetingPublishingService> _logger;
@@ -38,17 +40,11 @@ public class MeetingPublishingService : IMeetingPublishingService
     public async Task<PublishResultDto> PublishMinutesAsync(
         Guid meetingId, Guid minutesId, Guid userId, CancellationToken ct)
     {
-        var meeting = await _db.Meetings
-            .FirstOrDefaultAsync(m => m.Id == meetingId, ct);
+        var meeting = await OwnedMeetingAsync(meetingId, userId, ct);
         if (meeting == null)
         {
-            _logger.LogWarning("PublishMinutes: meeting {MeetingId} not found", meetingId);
-            return new PublishResultDto
-            {
-                MeetingId = meetingId,
-                Status = "not_found",
-                Message = "Meeting not found."
-            };
+            _logger.LogWarning("PublishMinutes: meeting {MeetingId} not found for caller", meetingId);
+            return NotFoundResult(meetingId, "Meeting not found.");
         }
 
         var minutes = await _db.MeetingMinutesVersions
@@ -84,6 +80,7 @@ public class MeetingPublishingService : IMeetingPublishingService
             WorkspaceId = workspaceId,
             TopicId = topicId,
             SourceType = "meeting_minutes",
+            Url = MeetingResourceUrl(meetingId),
             Title = $"{meeting.Title} - 会议纪要",
             Author = author,
             ContentHash = null
@@ -123,17 +120,11 @@ public class MeetingPublishingService : IMeetingPublishingService
     public async Task<PublishResultDto> PublishTranscriptAsync(
         Guid meetingId, Guid transcriptId, Guid userId, CancellationToken ct)
     {
-        var meeting = await _db.Meetings
-            .FirstOrDefaultAsync(m => m.Id == meetingId, ct);
+        var meeting = await OwnedMeetingAsync(meetingId, userId, ct);
         if (meeting == null)
         {
-            _logger.LogWarning("PublishTranscript: meeting {MeetingId} not found", meetingId);
-            return new PublishResultDto
-            {
-                MeetingId = meetingId,
-                Status = "not_found",
-                Message = "Meeting not found."
-            };
+            _logger.LogWarning("PublishTranscript: meeting {MeetingId} not found for caller", meetingId);
+            return NotFoundResult(meetingId, "Meeting not found.");
         }
 
         var segments = await _db.TranscriptionSegments
@@ -182,6 +173,7 @@ public class MeetingPublishingService : IMeetingPublishingService
             WorkspaceId = workspaceId,
             TopicId = topicId,
             SourceType = "meeting_transcript",
+            Url = MeetingResourceUrl(meetingId),
             Title = $"{meeting.Title} - 转写记录",
             Author = author,
             ContentHash = null
@@ -221,17 +213,11 @@ public class MeetingPublishingService : IMeetingPublishingService
     public async Task<PublishResultDto> PublishActionItemsAsync(
         Guid meetingId, Guid userId, CancellationToken ct)
     {
-        var meeting = await _db.Meetings
-            .FirstOrDefaultAsync(m => m.Id == meetingId, ct);
+        var meeting = await OwnedMeetingAsync(meetingId, userId, ct);
         if (meeting == null)
         {
-            _logger.LogWarning("PublishActionItems: meeting {MeetingId} not found", meetingId);
-            return new PublishResultDto
-            {
-                MeetingId = meetingId,
-                Status = "not_found",
-                Message = "Meeting not found."
-            };
+            _logger.LogWarning("PublishActionItems: meeting {MeetingId} not found for caller", meetingId);
+            return NotFoundResult(meetingId, "Meeting not found.");
         }
 
         // Load confirmed action items (CONFIRMED, MODIFIED, CONVERTED_TO_TASK)
@@ -274,6 +260,7 @@ public class MeetingPublishingService : IMeetingPublishingService
             WorkspaceId = workspaceId,
             TopicId = topicId,
             SourceType = "meeting_action_items",
+            Url = MeetingResourceUrl(meetingId),
             Title = $"{meeting.Title} - 行动项",
             Author = author,
             ContentHash = null
@@ -313,17 +300,11 @@ public class MeetingPublishingService : IMeetingPublishingService
     public async Task<PublishResultDto> PublishAllAsync(
         Guid meetingId, Guid userId, CancellationToken ct)
     {
-        var meeting = await _db.Meetings
-            .FirstOrDefaultAsync(m => m.Id == meetingId, ct);
+        var meeting = await OwnedMeetingAsync(meetingId, userId, ct);
         if (meeting == null)
         {
-            _logger.LogWarning("PublishAll: meeting {MeetingId} not found", meetingId);
-            return new PublishResultDto
-            {
-                MeetingId = meetingId,
-                Status = "not_found",
-                Message = "Meeting not found."
-            };
+            _logger.LogWarning("PublishAll: meeting {MeetingId} not found for caller", meetingId);
+            return NotFoundResult(meetingId, "Meeting not found.");
         }
 
         var results = new List<PublishResultDto>();
@@ -381,6 +362,17 @@ public class MeetingPublishingService : IMeetingPublishingService
     // ══════════════════════════════════════════════════════════════════════
     //  Helpers
     // ══════════════════════════════════════════════════════════════════════
+
+    private async Task<Meeting?> OwnedMeetingAsync(Guid meetingId, Guid userId, CancellationToken ct) =>
+        await _db.Meetings.FirstOrDefaultAsync(
+            m => m.Id == meetingId && m.CreatedBy == userId, ct);
+
+    private static PublishResultDto NotFoundResult(Guid meetingId, string message) => new()
+    {
+        MeetingId = meetingId,
+        Status = "not_found",
+        Message = message
+    };
 
     private string ResolveAuthor(Guid userId)
     {

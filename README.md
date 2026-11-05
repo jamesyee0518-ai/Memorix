@@ -149,13 +149,29 @@ npm run dev          # Next.js dev server
 
 ## Configuration
 
-The primary configuration file is `src/KnowledgeEngine.Api/appsettings.json`. Key sections:
+The primary configuration file is `src/KnowledgeEngine.Api/appsettings.json`. It intentionally does **not** contain a JWT signing key, database password, or object-storage secret. Supply those at runtime.
 
 | Section | Purpose |
 |---|---|
-| `ConnectionStrings` | PostgreSQL connection string (cloud mode) |
-| `Jwt` | JWT issuer, audience, secret, and token expiry |
-| `Minio` | Object storage endpoint, credentials, and bucket |
+| `ConnectionStrings` | PostgreSQL connection string (cloud mode). Required outside Development unless `DatabaseProvider=sqlite`. |
+| `Jwt` | JWT issuer, audience, secret, and token expiry. `Jwt:Secret` must be unique and at least 32 bytes outside Development. |
+| `Minio` | Object storage endpoint, credentials, and bucket. Access key and secret key are required for PostgreSQL/cloud mode outside Development. |
+
+Copy `.env.example` and export the variables, or store them with user secrets (Development only):
+
+```bash
+cd src/KnowledgeEngine.Api
+dotnet user-secrets set "Jwt:Secret" "$(openssl rand -base64 48)"
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5432;Database=knowledge_engine;Username=ke_user;Password=<local-only-password>"
+dotnet user-secrets set "Minio:AccessKey" "<local-access-key>"
+dotnet user-secrets set "Minio:SecretKey" "<local-secret-key>"
+```
+
+Environment variable names use `__` for nested keys, for example `Jwt__Secret` and `ConnectionStrings__DefaultConnection`. `docker compose up` still creates a local Postgres role for development; pass that password to the API through the environment or user secrets. Do not put it back into `appsettings.json`.
+
+Outside Development the process refuses to start if `Jwt:Secret` is missing, shorter than 32 bytes, or still the historical placeholder, and, unless `DatabaseProvider=sqlite`, if the database connection string or MinIO credentials are missing or still `ke_password` / `minioadmin`. Development may omit `Jwt:Secret`; the API then uses an in-process development-only key that is rejected in every other environment.
+
+Values that used to be committed (`Jwt:Secret`, `Password=ke_password`, MinIO `minioadmin`) remain in git history and must be rotated wherever they were deployed. Do not rewrite history to hide them.
 | `Llm` | LLM endpoint, API key, model name, and max tokens (OpenAI-compatible) |
 | `Embedding` | Embedding model endpoint and model name |
 | `Audio` | ASR/TTS provider toggles, Whisper model, VAD, device capability thresholds, LAN node discovery, circuit breaker, and provider pricing |

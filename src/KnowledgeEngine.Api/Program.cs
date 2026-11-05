@@ -25,6 +25,7 @@ using Serilog;
 var isMcpMode = args.Contains("--mcp");
 
 var builder = WebApplication.CreateBuilder(args);
+StartupSecrets.Apply(builder);
 
 // Serilog — in MCP mode, redirect logs to stderr to keep stdout clean for JSON-RPC
 builder.Host.UseSerilog((ctx, lc) =>
@@ -232,30 +233,6 @@ using (var scope = app.Services.CreateScope())
 
             scope.ServiceProvider.GetRequiredService<ILocalIdentityService>()
                 .EnsureIdentityAsync().GetAwaiter().GetResult();
-        }
-
-        if (app.Environment.IsDevelopment())
-        {
-            const string testEmail = "test@example.com";
-            if (!db.Users.Any(u => u.Email == testEmail))
-            {
-                var now = DateTime.UtcNow;
-                var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
-                db.Users.Add(new User
-                {
-                    Id = Guid.NewGuid(),
-                    Email = testEmail,
-                    Nickname = "测试用户",
-                    PasswordHash = passwordHasher.HashPassword("12345678"),
-                    PlanCode = "free",
-                    Role = PlatformRoles.User,
-                    Status = "active",
-                    Timezone = "Asia/Shanghai",
-                    CreatedAt = now,
-                    UpdatedAt = now
-                });
-                db.SaveChanges();
-            }
         }
 
         var adminEmails = builder.Configuration.GetSection("Platform:AdminEmails").Get<string[]>() ?? [];
