@@ -211,15 +211,249 @@ public class MeetingService : IMeetingService
             return false;
         }
 
-        // Soft delete: mark as DELETED rather than removing the row.
-        meeting.Status = MeetingStatuses.Deleted;
-        meeting.UpdatedAt = DateTime.UtcNow;
+        var filesToDelete = new List<string>();
+        var storedFiles = new List<FileObject>();
 
-        await _db.SaveChangesAsync(ct);
+        if (_db is DbContext dbContext)
+        {
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
+            storedFiles = await DeleteMeetingGraphAsync(meeting, filesToDelete, ct);
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        else
+        {
+            storedFiles = await DeleteMeetingGraphAsync(meeting, filesToDelete, ct);
+            await _db.SaveChangesAsync(ct);
+        }
 
-        _logger.LogInformation("Meeting soft-deleted: {MeetingId}", meetingId);
+        await DeleteMeetingFilesAsync(meetingId, filesToDelete, storedFiles, ct);
 
+        _logger.LogInformation("Meeting deleted with dependent data: {MeetingId}", meetingId);
         return true;
+    }
+
+    private async Task<List<FileObject>> DeleteMeetingGraphAsync(
+        Meeting meeting,
+        List<string> filesToDelete,
+        CancellationToken ct)
+    {
+        var meetingId = meeting.Id;
+        var audioAssets = await _db.AudioAssets.Where(a => a.MeetingId == meetingId).ToListAsync(ct);
+        var assetIds = audioAssets.Select(a => a.Id).ToList();
+        CollectMeetingFile(filesToDelete, meetingId, audioAssets.Select(a => a.OriginalFilePath));
+        CollectMeetingFile(filesToDelete, meetingId, audioAssets.Select(a => a.NormalizedFilePath));
+
+        var recordingChunks = await _db.RecordingChunks.Where(c => c.MeetingId == meetingId).ToListAsync(ct);
+        CollectMeetingFile(filesToDelete, meetingId, recordingChunks.Select(c => c.LocalUri));
+
+        var processingTasks = await _db.MeetingProcessingTasks.Where(t => t.MeetingId == meetingId).ToListAsync(ct);
+        var jobIds = new HashSet<Guid>();
+        if (assetIds.Count > 0)
+        {
+            var assetJobs = await _db.TranscriptionJobs
+                .Where(j => assetIds.Contains(j.AudioAssetId))
+                .Select(j => j.Id)
+                .ToListAsync(ct);
+            foreach (var id in assetJobs) jobIds.Add(id);
+        }
+        foreach (var task in processingTasks)
+        {
+            if (task.TranscriptionJobId.HasValue) jobIds.Add(task.TranscriptionJobId.Value);
+        }
+
+        var jobs = jobIds.Count == 0
+            ? new List<TranscriptionJob>()
+            : await _db.TranscriptionJobs.Where(j => jobIds.Contains(j.Id)).ToListAsync(ct);
+        var segments = jobIds.Count == 0
+            ? new List<TranscriptionSegment>()
+            : await _db.TranscriptionSegments.Where(s => jobIds.Contains(s.TranscriptionJobId)).ToListAsync(ct);
+        var versions = jobIds.Count == 0
+            ? new List<TranscriptionVersion>()
+            : await _db.TranscriptionVersions.Where(v => jobIds.Contains(v.TranscriptionJobId)).ToListAsync(ct);
+
+        var link = MeetingPublishingService.MeetingResourceUrl(meetingId);
+        var publishedSources = await _db.Sources.Where(s => s.Url == link).ToListAsync(ct);
+        var sourceIds = publishedSources.Select(s => s.Id).ToHashSet();
+        var documentIds = new HashSet<Guid>();
+        foreach (var job in jobs)
+        {
+            if (job.DocumentId.HasValue) documentIds.Add(job.DocumentId.Value);
+        }
+        foreach (var segment in segments)
+        {
+            if (segment.DocumentId.HasValue) documentIds.Add(segment.DocumentId.Value);
+        }
+        if (assetIds.Count > 0)
+        {
+            var audioDocuments = await _db.Documents
+                .Where(d => d.AudioAssetId.HasValue && assetIds.Contains(d.AudioAssetId.Value))
+                .Select(d => d.Id)
+                .ToListAsync(ct);
+            foreach (var id in audioDocuments) documentIds.Add(id);
+        }
+        if (sourceIds.Count > 0)
+        {
+            var publishedDocuments = await _db.Documents
+                .Where(d => sourceIds.Contains(d.SourceId))
+                .Select(d => d.Id)
+                .ToListAsync(ct);
+            foreach (var id in publishedDocuments) documentIds.Add(id);
+        }
+
+        if (documentIds.Count > 0)
+        {
+            var chunks = await _db.DocumentChunks.Where(c => documentIds.Contains(c.DocumentId)).ToListAsync(ct);
+            var chunkIds = chunks.Select(c => c.Id).ToList();
+            if (chunkIds.Count > 0)
+            {
+                var embeddings = await _db.ChunkEmbeddings.Where(e => chunkIds.Contains(e.ChunkId)).ToListAsync(ct);
+                var localizations = await _db.ChunkLocalizations.Where(l => chunkIds.Contains(l.ChunkId)).ToListAsync(ct);
+                var enrichments = await _db.ChunkEnrichments.Where(e => chunkIds.Contains(e.ChunkId)).ToListAsync(ct);
+                _db.ChunkEmbeddings.RemoveRange(embeddings);
+                _db.ChunkLocalizations.RemoveRange(localizations);
+                _db.ChunkEnrichments.RemoveRange(enrichments);
+            }
+
+            var mentions = await _db.EntityMentions.Where(m => documentIds.Contains(m.DocumentId)).ToListAsync(ct);
+            var tags = await _db.DocumentTags.Where(t => documentIds.Contains(t.DocumentId)).ToListAsync(ct);
+            var documentEntities = await _db.DocumentEntities.Where(e => documentIds.Contains(e.DocumentId)).ToListAsync(ct);
+            var logs = await _db.DocumentProcessingLogs
+                .Where(l => l.DocumentId.HasValue && documentIds.Contains(l.DocumentId.Value))
+                .ToListAsync(ct);
+            var batchJobs = await _db.MultilingualBatchJobs.Where(j => documentIds.Contains(j.DocumentId)).ToListAsync(ct);
+            var documents = await _db.Documents.Where(d => documentIds.Contains(d.Id)).ToListAsync(ct);
+            _db.EntityMentions.RemoveRange(mentions);
+            _db.DocumentTags.RemoveRange(tags);
+            _db.DocumentEntities.RemoveRange(documentEntities);
+            _db.DocumentProcessingLogs.RemoveRange(logs);
+            _db.MultilingualBatchJobs.RemoveRange(batchJobs);
+            _db.DocumentChunks.RemoveRange(chunks);
+            _db.Documents.RemoveRange(documents);
+        }
+
+        var fileIds = publishedSources
+            .Where(s => s.OriginalFileId.HasValue)
+            .Select(s => s.OriginalFileId!.Value)
+            .Distinct()
+            .ToList();
+        var storedFiles = fileIds.Count == 0
+            ? new List<FileObject>()
+            : await _db.Files.Where(f => fileIds.Contains(f.Id)).ToListAsync(ct);
+        foreach (var file in storedFiles)
+        {
+            CollectMeetingFile(filesToDelete, meetingId, [file.LocalPath]);
+        }
+
+        _db.TranscriptionVersions.RemoveRange(versions);
+        _db.TranscriptionSegments.RemoveRange(segments);
+        _db.TranscriptionJobs.RemoveRange(jobs);
+        _db.Files.RemoveRange(storedFiles);
+        _db.Sources.RemoveRange(publishedSources);
+        _db.AudioAssets.RemoveRange(audioAssets);
+        _db.RecordingChunks.RemoveRange(recordingChunks);
+        _db.MeetingProcessingTasks.RemoveRange(processingTasks);
+        _db.MeetingSpeakers.RemoveRange(await _db.MeetingSpeakers.Where(s => s.MeetingId == meetingId).ToListAsync(ct));
+        _db.MeetingMinutesVersions.RemoveRange(await _db.MeetingMinutesVersions.Where(v => v.MeetingId == meetingId).ToListAsync(ct));
+        _db.ActionItems.RemoveRange(await _db.ActionItems.Where(a => a.MeetingId == meetingId).ToListAsync(ct));
+        _db.PseudonymMappings.RemoveRange(await _db.PseudonymMappings.Where(p => p.MeetingId == meetingId).ToListAsync(ct));
+        _db.Meetings.Remove(meeting);
+        return storedFiles;
+    }
+
+    private async Task DeleteMeetingFilesAsync(
+        Guid meetingId,
+        IEnumerable<string> paths,
+        IReadOnlyList<FileObject> storedFiles,
+        CancellationToken ct)
+    {
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete meeting file {Path}", path);
+            }
+        }
+
+        if (_fileStorage != null)
+        {
+            foreach (var file in storedFiles)
+            {
+                try
+                {
+                    await _fileStorage.DeleteFileAsync(file.Bucket, file.ObjectKey, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete stored object {Bucket}/{Key}", file.Bucket, file.ObjectKey);
+                }
+            }
+        }
+
+        var recordingDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".knowledge-engine",
+            "recordings",
+            meetingId.ToString("D"));
+        try
+        {
+            if (Directory.Exists(recordingDir)) Directory.Delete(recordingDir, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete recording directory for meeting {MeetingId}", meetingId);
+        }
+    }
+
+    private static void CollectMeetingFile(List<string> paths, Guid meetingId, IEnumerable<string?> candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (IsSafeMeetingFile(candidate, meetingId))
+            {
+                paths.Add(Path.GetFullPath(candidate!));
+            }
+        }
+    }
+
+    private static bool IsSafeMeetingFile(string? path, Guid meetingId)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        if (!File.Exists(full)) return false;
+        var root = Path.GetPathRoot(full);
+        if (string.IsNullOrEmpty(root) ||
+            string.Equals(full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var recordingDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".knowledge-engine",
+            "recordings",
+            meetingId.ToString("D"));
+        var recordingRoot = Path.GetFullPath(recordingDir) + Path.DirectorySeparatorChar;
+        if (full.StartsWith(recordingRoot, StringComparison.OrdinalIgnoreCase)) return true;
+
+        var marker = meetingId.ToString("D");
+        return full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(part => string.Equals(part, marker, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <inheritdoc/>
